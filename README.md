@@ -58,20 +58,32 @@ your home network. That's a Google security rule, not a limitation of
 this project, and it's why "Connect a Gmail account" has to happen via a
 public HTTPS URL rather than your NAS's local IP.
 
-The good news: Asustor NAS have this built in for free (EZ-Connect +
-Certificate Manager + Reverse Proxy - see section 3 below), so it's a
-one-time, ~15 minute setup, not an ongoing chore. Once it's done, the
-dashboard itself works fine over plain `http://<nas-ip>:4568/` on your
-home network for everyday use (settings, run-now, status) - the public
-HTTPS URL is only strictly needed for the "Connect a Gmail account"
-button.
+The good news: this is a one-time setup, not an ongoing chore, and
+section 3 below covers two ways to do it:
 
-**Security note**: this means your NAS becomes reachable from the public
-internet on whatever port you choose in the Reverse Proxy step. The
-dashboard is password-protected (`DASHBOARD_PASSWORD`) specifically
-because of this - use a long, random, unique password. Everything else on
-your NAS stays exactly as exposed (or not) as it is today; only the one
-container/port you explicitly proxy is affected.
+- **Cloudflare Tunnel (recommended)** - a free `cloudflared` container
+  already included in `docker-compose.yml` makes an outbound-only
+  connection to Cloudflare, so there's no router port-forwarding and no
+  certificate to issue or renew on the NAS at all - Cloudflare handles
+  the HTTPS certificate for you. The only things this needs that Asustor's
+  own route doesn't: a domain name you own (a cheap one is fine, a few
+  dollars a year) and its DNS pointed at Cloudflare (free, no card
+  needed).
+- **Asustor's own EZ-Connect + Certificate Manager + Reverse Proxy** -
+  no domain purchase needed (uses a free `myasustor.com` subdomain
+  instead), but you're managing the certificate and a router port
+  forward yourself, and the Let's Encrypt step there can be finicky.
+
+Once whichever route is set up, the dashboard itself works fine over
+plain `http://<nas-ip>:4568/` on your home network for everyday use
+(settings, run-now, status) - the public HTTPS URL is only strictly
+needed for the "Connect a Gmail account" button.
+
+**Security note**: either route means your NAS dashboard becomes
+reachable from the public internet. It's password-protected
+(`DASHBOARD_PASSWORD`) specifically because of this - use a long, random,
+unique password. Everything else on your NAS stays exactly as exposed (or
+not) as it is today; only this one container is affected.
 
 ---
 
@@ -118,10 +130,69 @@ without changing any code:
    "Connect a Gmail account" twice from the dashboard, once signed into
    each.
 
-## 3. Expose the NAS over HTTPS (Asustor EZ-Connect + Reverse Proxy)
+## 3. Expose the NAS over HTTPS
 
-Skip this if you already have a domain/HTTPS route to the NAS - just use
-that instead of `myasustor.com` below.
+Two routes - pick one. Cloudflare Tunnel is recommended: no router
+changes, no certificate to issue or renew, and it sidesteps the Asustor
+Certificate Manager's Let's Encrypt errors entirely (a known rough edge -
+"ACME Client has encountered an issue" / "Ref. 5401" are both this same
+underlying HTTP-validation problem, not something wrong with your NAS).
+
+### Route A: Cloudflare Tunnel (recommended)
+
+**What you need first**: a domain name you own. If you don't have one
+already, the simplest path is buying one directly through Cloudflare
+itself (typically $4-15/year depending on the extension - `.com` is
+around $10) so registration and DNS live in the same place with nothing
+extra to configure. If you already own a domain anywhere else (Namecheap,
+GoDaddy, etc.), you can use that instead - step 2 below covers it.
+
+1. **Create a free Cloudflare account** at <https://dash.cloudflare.com/sign-up>
+   - no credit card needed for this.
+2. **Add your domain to Cloudflare**:
+   - If you just bought the domain through Cloudflare Registrar, this is
+     automatic - skip to step 3.
+   - If you already own a domain elsewhere: in the Cloudflare dashboard,
+     **Add a site**, enter your domain, choose the Free plan. Cloudflare
+     shows you two nameservers (e.g. `aida.ns.cloudflare.com`). Log into
+     wherever you registered the domain, find its DNS/nameserver
+     settings, and replace the existing nameservers with the two
+     Cloudflare gives you. You're only moving DNS management, not the
+     registration itself. This can take anywhere from a few minutes to a
+     few hours to take effect - Cloudflare's dashboard shows the domain
+     as "Active" once it has.
+3. **Open Zero Trust** (left sidebar of the Cloudflare dashboard, or
+   <https://one.dash.cloudflare.com/>) - free, no card needed for this
+   either. Go to **Networks > Tunnels > Create a tunnel**, choose
+   **Cloudflared**, and name it (e.g. `gmail-ai-sorter`).
+4. On the next screen, under **Install and run a connector**, ignore the
+   install commands shown (those are for installing `cloudflared`
+   directly on a machine) - you just need the **tunnel token**, a long
+   string shown further down the page or under the tunnel's "Configure"
+   tab afterwards. Copy it.
+5. Still in that tunnel's settings, go to the **Public Hostname** tab and
+   add a route:
+   - Subdomain: anything you like, e.g. `gmail`
+   - Domain: pick your domain from the dropdown
+   - Type: `HTTP`, URL: `gmail-ai-sorter:4568` (this is the Docker
+     Compose service name from `docker-compose.yml`, not an IP - the
+     `cloudflared` container reaches it directly over Docker's internal
+     network once both containers are running in the same stack).
+   - Save.
+6. In Portainer, paste that tunnel token into the stack's environment
+   variables as `CLOUDFLARE_TUNNEL_TOKEN` (Deploy the stack first if you
+   haven't yet - see section 4 - then edit the stack's environment
+   variables and redeploy to pick it up).
+7. Your `PUBLIC_BASE_URL` is `https://gmail.yourdomain.com` (whatever
+   subdomain/domain you chose in step 5, no trailing slash). Test it in a
+   browser after redeploying - it should load the dashboard's Setup or
+   login page directly over HTTPS, with a valid certificate Cloudflare
+   issued automatically. No router port-forwarding was needed anywhere in
+   this process.
+
+### Route B: Asustor's own EZ-Connect + Certificate Manager + Reverse Proxy
+
+Skip this if you've done Route A above.
 
 1. **ADM > EZ-Connect** (or **Settings > EZ-Connect**): register a free
    `myasustor.com` subdomain if you don't already have one, e.g.
@@ -131,6 +202,20 @@ that instead of `myasustor.com` below.
    varies slightly by ADM version): add a new certificate, choose
    **Let's Encrypt**, and issue it for your `myasustor.com` hostname. It
    auto-renews.
+   - **Domain name field**: enter the *full* hostname
+     (`joe123.myasustor.com`), not just the subdomain prefix - a
+     truncated entry here is a common cause of "Unable to apply settings
+     (Ref. 5401)".
+   - **Port 80 must be forwarded** from your router to the NAS's LAN IP
+     before you click Finish - Let's Encrypt briefly connects over plain
+     HTTP to verify you own the domain, and this fails silently
+     (producing the same Ref. 5401 error) if port 80 isn't reachable from
+     the internet at that moment. It needs to stay forwarded afterwards
+     too, since the certificate renews itself the same way periodically.
+   - If it still fails after both of those are correct, confirm the
+     hostname actually resolves by opening `http://joe123.myasustor.com`
+     from your phone on mobile data (not home WiFi) - it should attempt a
+     connection rather than showing a DNS/"server not found" error.
 3. **ADM > Settings > Services > Reverse Proxy**: add a new proxy domain:
    - Protocol: HTTPS, Server name: your `myasustor.com` hostname, Port:
      an unused external port (e.g. `8443` - avoid `443` if something else
@@ -202,7 +287,8 @@ flat, there's no nesting for the upload to lose.
    prefer to set them here up front instead, switch to "Advanced mode" (a
    plain textarea) and paste in the lines from `.env.example` you want
    filled in: `GEMINI_API_KEY`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`,
-   `PUBLIC_BASE_URL`, `DASHBOARD_PASSWORD`.
+   `PUBLIC_BASE_URL`, `DASHBOARD_PASSWORD`, and (if using Route A in
+   section 3) `CLOUDFLARE_TUNNEL_TOKEN`.
 4. Deploy. Portainer clones the repo onto the NAS and builds the image
    there - since that's the NAS's own ARM64 engine, the image comes out
    ARM64 automatically, no cross-build flags needed. The first build
@@ -246,6 +332,12 @@ only connecting a *new* Gmail account needs the public HTTPS URL.
 
 ## 6. Known caveats
 
+- **The `cloudflared` container is harmless to leave in the stack even if
+  unused** - with `CLOUDFLARE_TUNNEL_TOKEN` blank (e.g. you went with
+  Route B in section 3 instead), it exits immediately with an error, retries
+  a handful of times, then settles into a stopped state rather than
+  spamming logs forever. Expected, and doesn't affect the main
+  `gmail-ai-sorter` container at all.
 - **The Setup page is always reachable at `/setup`**, even after it's
   been completed once - handy if a value changes (a rotated Gemini key,
   a new NAS domain) and you'd rather update it from the browser than
