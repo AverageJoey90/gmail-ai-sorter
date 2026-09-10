@@ -1,6 +1,6 @@
 """Bootstrap configuration: the handful of secrets the app needs to do
 anything useful (Gemini key, Google OAuth client, public URL, dashboard
-password).
+password, and an optional Cloudflare Tunnel token - see tunnel_manager.py).
 
 These can be set as env vars in the Portainer stack, but don't have to be
 - if any are missing, the dashboard boots anyway and shows a Setup page
@@ -23,9 +23,10 @@ import threading
 from dataclasses import dataclass
 from pathlib import Path
 
-# The 6 fields the Setup page can fill in. Only the first 5 are mandatory
-# before the rest of the dashboard unlocks - gemini_model has a sensible
-# default and is never "missing".
+# The fields the Setup page can fill in. Only these 5 are mandatory before
+# the rest of the dashboard unlocks - gemini_model has a sensible default
+# and cloudflare_tunnel_token is entirely optional (see tunnel_manager.py),
+# so neither is ever "missing".
 REQUIRED_FIELDS = (
     "gemini_api_key",
     "google_client_id",
@@ -47,6 +48,7 @@ class BootstrapConfig:
     google_client_secret: str
     public_base_url: str  # e.g. https://joe123.myasustor.com:8443 (no trailing slash)
     dashboard_password: str
+    cloudflare_tunnel_token: str  # optional - see tunnel_manager.py
     data_dir: str
     port: int
     flask_secret_key: str
@@ -130,6 +132,7 @@ class BootstrapStore:
             google_client_secret=pick("google_client_secret", "GOOGLE_CLIENT_SECRET"),
             public_base_url=pick("public_base_url", "PUBLIC_BASE_URL").rstrip("/"),
             dashboard_password=pick("dashboard_password", "DASHBOARD_PASSWORD"),
+            cloudflare_tunnel_token=pick("cloudflare_tunnel_token", "CLOUDFLARE_TUNNEL_TOKEN"),
             data_dir=self.data_dir,
             port=int(_env("PORT", "4568") or "4568"),
             flask_secret_key=_load_or_create_secret_key(self.data_dir),

@@ -93,7 +93,19 @@ def create_app(bootstrap_store: BootstrapStore, store: SettingsStore) -> Flask:
         "google_client_secret": ("Google OAuth client secret", "text", ""),
         "public_base_url": ("Public base URL", "text", "e.g. https://joe123.myasustor.com:8443 (no trailing slash) - must match the redirect URI registered with Google"),
         "dashboard_password": ("Dashboard password", "password", "Choose a password to protect this dashboard"),
+        "cloudflare_tunnel_token": (
+            "Cloudflare Tunnel token",
+            "text",
+            "Optional - only needed if you're using Cloudflare Tunnel for HTTPS (README section 3, "
+            "Route A). Leave blank if you're getting HTTPS a different way. Starting, changing, or "
+            "clearing this takes effect within about 15 seconds - no redeploy needed.",
+        ),
     }
+
+    # Fields that are never echoed back into the form once set - just a
+    # placeholder note instead, so this page can't leak an already-saved
+    # secret to anyone who loads it.
+    SECRET_FIELDS = ("google_client_secret", "dashboard_password", "cloudflare_tunnel_token")
 
     @app.get("/setup")
     def setup_form():
@@ -104,8 +116,8 @@ def create_app(bootstrap_store: BootstrapStore, store: SettingsStore) -> Flask:
         for name, (label, itype, hint) in FIELD_LABELS.items():
             current = getattr(cfg, name, "") or ""
             # Never echo the secret/password fields back into the form.
-            value = "" if name in ("google_client_secret", "dashboard_password") else _esc(current)
-            placeholder = "(already set - leave blank to keep)" if current and name in ("google_client_secret", "dashboard_password") else ""
+            value = "" if name in SECRET_FIELDS else _esc(current)
+            placeholder = "(already set - leave blank to keep)" if current and name in SECRET_FIELDS else ""
             hint_html = f'<div class="muted">{_esc(hint)}</div>' if hint else ""
             fields_html.append(f"""
             <div class="field">

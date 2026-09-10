@@ -1,15 +1,18 @@
-"""Entry point. Starts two things in one process:
+"""Entry point. Starts three things in one process:
 
 1. A background daemon thread running the daily scheduler - checks every
    60s whether it's time for the configured RUN_AT_LOCAL_TIME and, if so,
    runs every connected account's sort+digest pipeline once.
-2. The dashboard web server (Flask app, served via waitress) on
+2. A background daemon thread supervising an optional Cloudflare Tunnel
+   subprocess (see tunnel_manager.py) - reacts within seconds to a tunnel
+   token being entered, changed, or cleared on the dashboard's Setup page.
+3. The dashboard web server (Flask app, served via waitress) on
    0.0.0.0:PORT (default 4568) in the foreground - connect Gmail accounts,
    change settings, trigger manual runs.
 
-Both share one SettingsStore instance (not two separate ones pointed at
-the same file) so the in-process lock actually serializes concurrent
-access between the scheduler thread and web request threads.
+All three share one SettingsStore/BootstrapStore pair (not separate
+instances pointed at the same files) so the in-process locks actually
+serialize concurrent access across threads.
 """
 from __future__ import annotations
 
@@ -27,6 +30,7 @@ import pipeline
 from config import BootstrapStore, is_bootstrap_complete
 from settings_store import SettingsStore
 from state_store import StateStore
+from tunnel_manager import TunnelManager
 from web_app import create_app
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -91,6 +95,9 @@ def main() -> None:
         return
 
     threading.Thread(target=scheduler_loop, args=(bootstrap_store, store), daemon=True).start()
+
+    tunnel_manager = TunnelManager(bootstrap_store)
+    threading.Thread(target=tunnel_manager.loop, daemon=True).start()
 
     app = create_app(bootstrap_store, store)
     port = bootstrap_store.resolve().port

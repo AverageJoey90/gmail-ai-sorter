@@ -23,6 +23,24 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# ca-certificates: needed at runtime for cloudflared's outbound TLS
+# connections to Cloudflare's edge (the slim base image doesn't ship a
+# trust store by default).
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# cloudflared runs as a supervised subprocess inside this same container
+# (see tunnel_manager.py) rather than a separate Docker service, so that
+# pasting/changing the tunnel token on the dashboard's own Setup page can
+# start, stop, or restart it directly - no second container, no Docker
+# socket access needed, no redeploy needed. Statically linked, single
+# binary, ~35MB - always fetches whatever is currently the latest release;
+# pin an exact version tag in this URL instead if you want reproducible
+# builds. Bundled unconditionally - it just sits unused if you don't
+# configure a tunnel token.
+ADD https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64 /usr/local/bin/cloudflared
+RUN chmod +x /usr/local/bin/cloudflared
+
 COPY *.py ./
 
 # Everything persistent (OAuth tokens, processed-message state, drafted
@@ -35,6 +53,6 @@ VOLUME ["/data"]
 # Dashboard (Gmail connect, settings, run-now).
 EXPOSE 4568
 
-# main.py starts both the background scheduler thread and the dashboard
-# web server - no cron daemon needed, one process.
+# main.py starts the background scheduler thread, the tunnel-manager
+# thread, and the dashboard web server, all in this one process.
 CMD ["python", "main.py"]

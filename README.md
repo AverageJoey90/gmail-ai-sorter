@@ -61,12 +61,14 @@ public HTTPS URL rather than your NAS's local IP.
 The good news: this is a one-time setup, not an ongoing chore, and
 section 3 below covers two ways to do it:
 
-- **Cloudflare Tunnel (recommended)** - a free `cloudflared` container
-  already included in `docker-compose.yml` makes an outbound-only
-  connection to Cloudflare, so there's no router port-forwarding and no
-  certificate to issue or renew on the NAS at all - Cloudflare handles
-  the HTTPS certificate for you. The only things this needs that Asustor's
-  own route doesn't: a domain name you own (a cheap one is fine, a few
+- **Cloudflare Tunnel (recommended)** - `cloudflared` is bundled into this
+  project's own image and runs as a background process the app manages
+  itself, making an outbound-only connection to Cloudflare so there's no
+  router port-forwarding and no certificate to issue or renew on the NAS
+  at all - Cloudflare handles the HTTPS certificate for you, and the
+  token that turns it on can be typed straight into the dashboard's Setup
+  page, same as every other secret. The only things this needs that
+  Asustor's own route doesn't: a domain name you own (a cheap one is fine, a few
   dollars a year) and its DNS pointed at Cloudflare (free, no card
   needed).
 - **Asustor's own EZ-Connect + Certificate Manager + Reverse Proxy** -
@@ -174,21 +176,37 @@ GoDaddy, etc.), you can use that instead - step 2 below covers it.
    add a route:
    - Subdomain: anything you like, e.g. `gmail`
    - Domain: pick your domain from the dropdown
-   - Type: `HTTP`, URL: `gmail-ai-sorter:4568` (this is the Docker
-     Compose service name from `docker-compose.yml`, not an IP - the
-     `cloudflared` container reaches it directly over Docker's internal
-     network once both containers are running in the same stack).
+   - Type: `HTTP`, URL: `localhost:4568` - `cloudflared` runs as a
+     background process directly inside the same container as the
+     dashboard (see "How the tunnel actually runs" below), not as a
+     separate one, so it reaches the dashboard on `localhost` rather than
+     over Docker's inter-container networking.
    - Save.
-6. In Portainer, paste that tunnel token into the stack's environment
-   variables as `CLOUDFLARE_TUNNEL_TOKEN` (Deploy the stack first if you
-   haven't yet - see section 4 - then edit the stack's environment
-   variables and redeploy to pick it up).
+6. Paste that tunnel token into `CLOUDFLARE_TUNNEL_TOKEN` - either in
+   Portainer's stack environment variables (deploy the stack first if you
+   haven't yet - see section 4 - then edit the environment variables and
+   redeploy), **or** into the dashboard's own **Setup page** at `/setup`
+   (reachable anytime, even after first-run setup is done) if the stack's
+   already running. The Setup page route takes effect within about 15
+   seconds with no redeploy at all - it's the easier option if you're
+   just adding or changing the tunnel token later.
 7. Your `PUBLIC_BASE_URL` is `https://gmail.yourdomain.com` (whatever
    subdomain/domain you chose in step 5, no trailing slash). Test it in a
-   browser after redeploying - it should load the dashboard's Setup or
-   login page directly over HTTPS, with a valid certificate Cloudflare
-   issued automatically. No router port-forwarding was needed anywhere in
-   this process.
+   browser after redeploying (or after ~15 seconds if you used the Setup
+   page) - it should load the dashboard's Setup or login page directly
+   over HTTPS, with a valid certificate Cloudflare issued automatically.
+   No router port-forwarding was needed anywhere in this process.
+
+**How the tunnel actually runs**: rather than a second Docker container,
+`cloudflared` is bundled into this project's own image and runs as a
+background process supervised from inside `main.py` (see
+`tunnel_manager.py`) - the moment `CLOUDFLARE_TUNNEL_TOKEN` is present
+(from either source in step 6), it starts that process automatically; if
+you clear the token later, it stops it. This is also why the "Save and
+continue"/Setup page can control it directly with no Docker socket access
+and no redeploy: it's just another background thread in the same
+container as the dashboard, reacting to the same `/data/bootstrap.json`
+file the rest of the Setup page already writes to.
 
 ### Route B: Asustor's own EZ-Connect + Certificate Manager + Reverse Proxy
 
@@ -332,12 +350,11 @@ only connecting a *new* Gmail account needs the public HTTPS URL.
 
 ## 6. Known caveats
 
-- **The `cloudflared` container is harmless to leave in the stack even if
-  unused** - with `CLOUDFLARE_TUNNEL_TOKEN` blank (e.g. you went with
-  Route B in section 3 instead), it exits immediately with an error, retries
-  a handful of times, then settles into a stopped state rather than
-  spamming logs forever. Expected, and doesn't affect the main
-  `gmail-ai-sorter` container at all.
+- **`cloudflared` being bundled into the image is harmless if you never
+  use it** - with `CLOUDFLARE_TUNNEL_TOKEN` left blank (e.g. you went
+  with Route B in section 3 instead), the background thread that would
+  manage it just never starts a process. No extra resource use, no log
+  spam, nothing to disable.
 - **The Setup page is always reachable at `/setup`**, even after it's
   been completed once - handy if a value changes (a rotated Gemini key,
   a new NAS domain) and you'd rather update it from the browser than
@@ -374,8 +391,9 @@ gmail-ai-sorter/
   docker-compose.yml          # Portainer stack
   requirements.txt            # container runtime deps
   .env.example                # template for Portainer's Environment variables box
-  main.py                     # entry point: scheduler thread + dashboard server
+  main.py                     # entry point: scheduler + tunnel manager threads, dashboard server
   config.py                   # bootstrap secrets (env vars, or entered via the Setup page)
+  tunnel_manager.py           # supervises the optional Cloudflare Tunnel subprocess
   settings_store.py           # everything the dashboard edits, persisted to /data
   oauth_web.py                # in-app Google OAuth connect flow
   web_app.py                  # Flask dashboard (port 4568)

@@ -36,14 +36,15 @@
 # http://<nas-lan-ip>:4568/ once you're on the home network) - see README.
 #
 # HTTPS via Cloudflare Tunnel (recommended - see README "Expose the NAS
-# over HTTPS" section): the second service below, `cloudflared`, makes an
-# outbound-only connection to Cloudflare so your public URL works with NO
-# router port-forwarding and NO certificate to manage on the NAS at all -
-# Cloudflare issues and renews the HTTPS certificate for you. Paste the
-# tunnel token from the Cloudflare Zero Trust dashboard into
-# CLOUDFLARE_TUNNEL_TOKEN in Portainer's environment variables. Leave it
-# blank and `cloudflared` just idles doing nothing if you'd rather use the
-# NAS's own EZ-Connect/Reverse Proxy route instead - it's not required.
+# over HTTPS" section, Route A): CLOUDFLARE_TUNNEL_TOKEN is also entirely
+# optional and works exactly like the 5 above - set it here, or paste it
+# into the dashboard's own Setup page (/setup, reachable anytime) instead.
+# Either way, the app runs `cloudflared` itself as a supervised background
+# process (see tunnel_manager.py) the moment a token is present - no
+# separate container, no router port-forwarding, and no certificate to
+# manage on the NAS at all; Cloudflare issues and renews it for you. Leave
+# it blank if you're using the NAS's own EZ-Connect/Reverse Proxy route
+# instead (Route B) - nothing extra runs.
 services:
   gmail-ai-sorter:
     build:
@@ -61,6 +62,7 @@ services:
       - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}
       - PUBLIC_BASE_URL=${PUBLIC_BASE_URL:-}
       - DASHBOARD_PASSWORD=${DASHBOARD_PASSWORD:-}
+      - CLOUDFLARE_TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN:-}
       - TZ=${TZ:-Europe/London}
       - PORT=4568
     ports:
@@ -77,37 +79,6 @@ services:
       # Survives stack updates/recreation - do NOT delete this volume
       # without reconnecting every Gmail account again afterwards.
       - gmail-ai-sorter-data:/data
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
-
-  cloudflared:
-    # Public HTTPS front door with no router changes and no certificate to
-    # manage - see README "Expose the NAS over HTTPS" for the one-time
-    # Cloudflare dashboard setup (create a tunnel, add a Public Hostname
-    # route pointing at http://gmail-ai-sorter:4568, copy the tunnel
-    # token here). Talks to gmail-ai-sorter over Compose's own internal
-    # network using the service name - no port needs publishing for this
-    # to work.
-    #
-    # If CLOUDFLARE_TUNNEL_TOKEN is left blank (e.g. you're using the
-    # NAS's own EZ-Connect/Reverse Proxy route instead), cloudflared exits
-    # immediately with an error - expected and harmless, it just means
-    # this container stays stopped rather than doing anything. Restart
-    # policy below gives it a handful of retries then leaves it alone
-    # instead of spamming the logs forever. The official image is
-    # distroless (no shell inside), so there's no way to script around
-    # this - only "tunnel run" itself, with or without a token, ever runs.
-    image: cloudflare/cloudflared:latest
-    container_name: gmail-ai-sorter-cloudflared
-    restart: on-failure:5
-    command: tunnel run
-    environment:
-      - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN:-}
-    depends_on:
-      - gmail-ai-sorter
     logging:
       driver: json-file
       options:
