@@ -7,10 +7,15 @@ the Gmail-sorting digest currently running as a Claude Cowork scheduled
 task, but running entirely under your own control with no per-message
 cost.
 
-**Deploy once, then everything else happens in the browser.** You set
-five secrets in Portainer's stack environment variables (once), deploy,
-then open the dashboard and click "Connect a Gmail account" - no scripts
-to run, no files to copy onto the NAS, no `.env` file to hunt for.
+**Deploy once, then everything else happens in the browser.** Deploy the
+stack with no environment variables set at all if you like - the
+dashboard boots anyway and walks you through a one-time **Setup page**
+for the five secrets it needs (Gemini key, Google OAuth client, public
+URL, dashboard password) right there in the browser. Prefer to set them
+in Portainer's stack environment variables up front instead? That works
+too - either way, once they're in place you open the dashboard and click
+"Connect a Gmail account". No scripts to run, no files to copy onto the
+NAS, no `.env` file to hunt for.
 
 ## What it does, once a day, per connected Gmail account
 
@@ -191,11 +196,13 @@ flat, there's no nesting for the upload to lose.
 2. **Repository URL**: paste the GitHub URL from Step A. **Repository
    reference**: leave as the default branch (usually `main`).
    **Compose path**: `docker-compose.yml`.
-3. Scroll to **Environment variables**, switch to "Advanced mode" (a
-   plain textarea), and paste in every line from `.env.example` with real
-   values filled in: `GEMINI_API_KEY`, `GOOGLE_CLIENT_ID`,
-   `GOOGLE_CLIENT_SECRET`, `PUBLIC_BASE_URL`, `DASHBOARD_PASSWORD`. That's
-   the entire deploy-time configuration.
+3. **Environment variables**: optional. Leave this empty and deploy right
+   away if you'd rather configure things afterwards from the browser (see
+   the Setup page below) - the stack deploys fine either way. If you'd
+   prefer to set them here up front instead, switch to "Advanced mode" (a
+   plain textarea) and paste in the lines from `.env.example` you want
+   filled in: `GEMINI_API_KEY`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`,
+   `PUBLIC_BASE_URL`, `DASHBOARD_PASSWORD`.
 4. Deploy. Portainer clones the repo onto the NAS and builds the image
    there - since that's the NAS's own ARM64 engine, the image comes out
    ARM64 automatically, no cross-build flags needed. The first build
@@ -211,8 +218,16 @@ with no terminal involved.
 ## 5. First run
 
 1. Open `PUBLIC_BASE_URL` in a browser (e.g.
-   `https://joe123.myasustor.com:8443/`), log in with
-   `DASHBOARD_PASSWORD`.
+   `https://joe123.myasustor.com:8443/`).
+   - **If you left the environment variables blank in Step B**, you'll
+     land on a **Setup page** instead of the login screen. Fill in the
+     Gemini key, Google OAuth client ID/secret, public base URL, and a
+     dashboard password, and submit - this is saved straight away
+     (persisted on the NAS, no redeploy needed) and you're taken to the
+     login screen.
+   - **If you set them in Portainer already**, you'll go straight to the
+     login screen.
+   Log in with `DASHBOARD_PASSWORD`.
 2. Click **+ Connect a Gmail account**, sign in with the first account,
    approve access. You're bounced back to the dashboard showing it
    connected. Repeat for the second account (sign out of Google or use an
@@ -231,6 +246,10 @@ only connecting a *new* Gmail account needs the public HTTPS URL.
 
 ## 6. Known caveats
 
+- **The Setup page is always reachable at `/setup`**, even after it's
+  been completed once - handy if a value changes (a rotated Gemini key,
+  a new NAS domain) and you'd rather update it from the browser than
+  redeploy the stack. A saved change there takes effect immediately.
 - **Gmail permalinks** (`.../#all/<id>` and `.../#drafts/<id>`) open in
   browser account slot `u/0` by default. If a link opens the wrong signed-
   in Google account in your browser, edit the `0` in the URL to match
@@ -264,7 +283,7 @@ gmail-ai-sorter/
   requirements.txt            # container runtime deps
   .env.example                # template for Portainer's Environment variables box
   main.py                     # entry point: scheduler thread + dashboard server
-  config.py                   # bootstrap secrets (env vars, set once)
+  config.py                   # bootstrap secrets (env vars, or entered via the Setup page)
   settings_store.py           # everything the dashboard edits, persisted to /data
   oauth_web.py                # in-app Google OAuth connect flow
   web_app.py                  # Flask dashboard (port 4568)

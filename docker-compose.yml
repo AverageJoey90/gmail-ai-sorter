@@ -15,10 +15,20 @@
 # you drag files in, which previously broke a `COPY app ./app` step.
 #
 # In Portainer: Stacks > Add stack > Build method: Repository > paste your
-# repo URL, Compose path: docker-compose.yml > in "Environment variables",
-# switch to Advanced mode and paste every line from .env.example with
-# real values filled in > Deploy. Since the build happens on the NAS
-# itself (ARM64), the correct architecture is picked up automatically.
+# repo URL, Compose path: docker-compose.yml > Deploy. Since the build
+# happens on the NAS itself (ARM64), the correct architecture is picked up
+# automatically.
+#
+# The 5 variables below (GEMINI_API_KEY, GOOGLE_CLIENT_ID,
+# GOOGLE_CLIENT_SECRET, PUBLIC_BASE_URL, DASHBOARD_PASSWORD) are entirely
+# OPTIONAL at deploy time - the ${VAR:-} defaults mean the stack deploys
+# fine with none of them set. Leave "Environment variables" empty and hit
+# Deploy right away if you'd rather; the dashboard will boot and show a
+# one-time Setup page at http://<nas-lan-ip>:4568/ where you type them in
+# through the browser instead. If you'd prefer to set them here up front,
+# switch "Environment variables" to Advanced mode and paste lines from
+# .env.example with real values - either way works and both take effect
+# immediately with no redeploy needed if changed later from the Setup page.
 #
 # Nothing else needs doing on the NAS after that: which Gmail accounts are
 # connected, the daily schedule, confidence threshold, and ignore list are
@@ -33,12 +43,14 @@ services:
     container_name: gmail-ai-sorter
     restart: unless-stopped
     environment:
-      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      # All optional - see the comment block above. Blank is fine; fill
+      # these in later from the dashboard's Setup page instead.
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.5-flash}
-      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
-      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
-      - PUBLIC_BASE_URL=${PUBLIC_BASE_URL}
-      - DASHBOARD_PASSWORD=${DASHBOARD_PASSWORD}
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}
+      - PUBLIC_BASE_URL=${PUBLIC_BASE_URL:-}
+      - DASHBOARD_PASSWORD=${DASHBOARD_PASSWORD:-}
       - TZ=${TZ:-Europe/London}
       - PORT=4568
     ports:

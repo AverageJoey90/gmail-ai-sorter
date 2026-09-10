@@ -17,12 +17,12 @@ import shutil
 import threading
 from pathlib import Path
 
-from flask import Flask, redirect, request, session, url_for
+from flask import Flask, g, redirect, request, session, url_for
 
 import oauth_web
 import pipeline
 from ai_client import AiClient
-from config import BootstrapConfig
+from config import BootstrapStore, is_bootstrap_complete, missing_fields
 from settings_store import SettingsStore
 
 log = logging.getLogger(__name__)
@@ -55,18 +55,86 @@ def _esc(s: str) -> str:
     return html.escape(s or "")
 
 
-def create_app(bootstrap: BootstrapConfig, store: SettingsStore) -> Flask:
+def create_app(bootstrap_store: BootstrapStore, store: SettingsStore) -> Flask:
     app = Flask(__name__)
-    app.secret_key = bootstrap.flask_secret_key
+    app.secret_key = bootstrap_store.resolve().flask_secret_key
+
+    # ---- resolve the live config on every request -----------------------------
+    # A Setup-page save takes effect immediately (no restart) because this
+    # re-reads /data/bootstrap.json (layered over env vars) on every request
+    # rather than using a value captured once at startup.
+    @app.before_request
+    def load_bootstrap():
+        g.bootstrap = bootstrap_store.resolve()
+
+    # ---- setup gate: nothing else works until the 5 required fields are set ---
+    @app.before_request
+    def require_setup():
+        if request.endpoint in ("setup_form", "setup_submit", "static"):
+            return None
+        if not is_bootstrap_complete(g.bootstrap):
+            return redirect(url_for("setup_form"))
+        return None
 
     # ---- auth gate -----------------------------------------------------------
     @app.before_request
     def require_login():
-        if request.endpoint in ("login_form", "login_submit", "static"):
+        if request.endpoint in ("login_form", "login_submit", "setup_form", "setup_submit", "static"):
             return None
         if not session.get("authed"):
             return redirect(url_for("login_form"))
         return None
+
+    # ---- first-run setup -------------------------------------------------------
+    FIELD_LABELS = {
+        "gemini_api_key": ("Gemini API key", "text", "From aistudio.google.com/apikey"),
+        "gemini_model": ("Gemini model", "text", "Defaults to gemini-2.5-flash if left blank"),
+        "google_client_id": ("Google OAuth client ID", "text", "From your Google Cloud OAuth client (Web application type)"),
+        "google_client_secret": ("Google OAuth client secret", "text", ""),
+        "public_base_url": ("Public base URL", "text", "e.g. https://joe123.myasustor.com:8443 (no trailing slash) - must match the redirect URI registered with Google"),
+        "dashboard_password": ("Dashboard password", "password", "Choose a password to protect this dashboard"),
+    }
+
+    @app.get("/setup")
+    def setup_form():
+        cfg = g.bootstrap
+        error = request.args.get("error", "")
+        flash = f'<div class="flash">{_esc(error)}</div>' if error else ""
+        fields_html = []
+        for name, (label, itype, hint) in FIELD_LABELS.items():
+            current = getattr(cfg, name, "") or ""
+            # Never echo the secret/password fields back into the form.
+            value = "" if name in ("google_client_secret", "dashboard_password") else _esc(current)
+            placeholder = "(already set - leave blank to keep)" if current and name in ("google_client_secret", "dashboard_password") else ""
+            hint_html = f'<div class="muted">{_esc(hint)}</div>' if hint else ""
+            fields_html.append(f"""
+            <div class="field">
+              <label for="{name}">{_esc(label)}</label>
+              <input type="{itype}" id="{name}" name="{name}" value="{value}" placeholder="{_esc(placeholder)}">
+              {hint_html}
+            </div>""")
+        body = f"""
+        <h1>Gmail AI Sorter &mdash; first-time setup</h1>
+        <p class="muted">These weren't set as environment variables in the Portainer stack, so fill them in here instead.
+        They're saved to this container's persistent /data volume and take effect immediately - no redeploy needed.</p>
+        {flash}
+        <div class="card">
+        <form method="post" action="{url_for('setup_submit')}">
+          {''.join(fields_html)}
+          <button type="submit">Save and continue</button>
+        </form>
+        </div>"""
+        return _page("Setup - Gmail AI Sorter", body)
+
+    @app.post("/setup")
+    def setup_submit():
+        fields = {name: request.form.get(name, "").strip() for name in FIELD_LABELS}
+        bootstrap_store.update(**fields)
+        cfg = bootstrap_store.resolve()
+        if not is_bootstrap_complete(cfg):
+            missing = ", ".join(missing_fields(cfg))
+            return redirect(url_for("setup_form", error=f"Still missing: {missing}"))
+        return redirect(url_for("login_form"))
 
     @app.get("/login")
     def login_form():
@@ -86,7 +154,7 @@ def create_app(bootstrap: BootstrapConfig, store: SettingsStore) -> Flask:
 
     @app.post("/login")
     def login_submit():
-        if request.form.get("password") == bootstrap.dashboard_password:
+        if request.form.get("password") == g.bootstrap.dashboard_password:
             session["authed"] = True
             session.permanent = True
             return redirect(url_for("dashboard"))
@@ -213,7 +281,7 @@ def create_app(bootstrap: BootstrapConfig, store: SettingsStore) -> Flask:
 
     @app.post("/accounts/<int:index>/remove")
     def remove_account(index: int):
-        account_dir = Path(bootstrap.data_dir) / f"account{index}"
+        account_dir = Path(g.bootstrap.data_dir) / f"account{index}"
         shutil.rmtree(account_dir, ignore_errors=True)
         store.remove_account(index)
         return redirect(url_for("dashboard", flash="Account disconnected."))
@@ -224,11 +292,15 @@ def create_app(bootstrap: BootstrapConfig, store: SettingsStore) -> Flask:
         if not account:
             return redirect(url_for("dashboard", flash="Account not found."))
 
+        # flask.g isn't accessible from a separately-spawned thread, so
+        # capture the resolved config into a local variable first.
+        cfg = g.bootstrap
+
         def _run():
-            ai = AiClient(bootstrap.gemini_api_key, bootstrap.gemini_model)
+            ai = AiClient(cfg.gemini_api_key, cfg.gemini_model)
             settings = store.get_settings()
             try:
-                summary = pipeline.run_account(account, bootstrap, settings, ai)
+                summary = pipeline.run_account(account, cfg, settings, ai)
             except Exception:
                 log.exception("Manual run failed for %s", account["address"])
                 summary = {"ok": False, "error": "Run failed - see container logs."}
@@ -239,13 +311,14 @@ def create_app(bootstrap: BootstrapConfig, store: SettingsStore) -> Flask:
 
     @app.post("/run-all")
     def run_all_now():
-        threading.Thread(target=pipeline.run_all, args=(bootstrap, store), daemon=True).start()
+        cfg = g.bootstrap  # captured before the thread starts - see run_one above
+        threading.Thread(target=pipeline.run_all, args=(cfg, store), daemon=True).start()
         return redirect(url_for("dashboard", flash="Run started for all accounts - refresh in a minute or two for results."))
 
     # ---- OAuth connect flow -----------------------------------------------------------
     @app.get("/oauth/start")
     def oauth_start():
-        auth_url, state = oauth_web.start_authorization(bootstrap)
+        auth_url, state = oauth_web.start_authorization(g.bootstrap)
         session["oauth_state"] = state
         return redirect(auth_url)
 
@@ -264,11 +337,11 @@ def create_app(bootstrap: BootstrapConfig, store: SettingsStore) -> Flask:
         # to this container over plain HTTP, so Flask would otherwise see
         # an http:// URL and mismatch what was registered with Google as
         # the https:// redirect_uri.
-        callback_url = f"{bootstrap.public_base_url}{oauth_web.REDIRECT_PATH}?{request.query_string.decode()}"
+        callback_url = f"{g.bootstrap.public_base_url}{oauth_web.REDIRECT_PATH}?{request.query_string.decode()}"
 
         index = store.add_account("(connecting...)")
         try:
-            address = oauth_web.finish_authorization(bootstrap, callback_url, expected_state, index)
+            address = oauth_web.finish_authorization(g.bootstrap, callback_url, expected_state, index)
         except Exception:
             log.exception("OAuth callback failed")
             store.remove_account(index)
