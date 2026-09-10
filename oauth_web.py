@@ -16,8 +16,8 @@ from pathlib import Path
 
 from google_auth_oauthlib.flow import Flow
 
-from .config import BootstrapConfig
-from .gmail_client import DEFAULT_SCOPES, GmailClient
+from config import BootstrapConfig
+from gmail_client import DEFAULT_SCOPES, GmailClient
 
 REDIRECT_PATH = "/oauth/callback"
 

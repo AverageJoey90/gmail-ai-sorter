@@ -150,14 +150,22 @@ that instead of `myasustor.com` below.
 **Why this needs a small detour through GitHub**: Portainer's "Web
 editor" and "Upload" stack methods only ever see the one
 `docker-compose.yml` file you paste or select - they never receive the
-`Dockerfile`/`app/` source sitting next to it, so `build:` always fails
+`Dockerfile`/`.py` files sitting next to it, so `build:` always fails
 that way (`open Dockerfile: no such file or directory`), no matter how
 you submit it. Portainer's **"Repository"** method is different: point it
 at a git repo URL and it clones the *whole* folder onto the NAS itself
-before building - Dockerfile, `app/`, everything - so `build:` works
-correctly, and the whole thing happens by clicking through the Stacks UI.
-No terminal, no `docker build` command. The only extra step is getting
-this folder into a repo first, which is also just a website.
+before building - Dockerfile, every `.py` file, everything - so `build:`
+works correctly, and the whole thing happens by clicking through the
+Stacks UI. No terminal, no `docker build` command. The only extra step is
+getting this folder into a repo first, which is also just a website.
+
+Every `.py` file in this project sits flat at the top level (no
+subfolder) specifically so this upload step can't go wrong: GitHub's
+drag-and-drop web uploader doesn't reliably preserve subfolders (an
+earlier version of this project had an `app/` subfolder, which is exactly
+what broke last time - the files landed at the repo root instead, and the
+build failed looking for a folder that wasn't there). With everything
+flat, there's no nesting for the upload to lose.
 
 **Step A - put the project on GitHub (web only, no git command line).**
 1. Go to <https://github.com/new>, create a free account if you don't
@@ -166,12 +174,14 @@ this folder into a repo first, which is also just a website.
    (API keys, password) is entered separately in Portainer, never
    committed to the repo.
 2. On the new repo's page, click **"uploading an existing file"** (or
-   **Add file > Upload files**). Drag in every file and folder from the
-   extracted `gmail-ai-sorter/` folder (`Dockerfile`, `requirements.txt`,
-   `README.md`, `docker-compose.yml`, `.env.example`, and the `app/`
-   folder with its `.py` files) and commit. GitHub's uploader preserves
-   the `app/` folder structure as long as you drag the folder itself
-   rather than picking files one by one.
+   **Add file > Upload files**). Drag in *every file* from the extracted
+   `gmail-ai-sorter/` folder - all the `.py` files, `Dockerfile`,
+   `requirements.txt`, `README.md`, `docker-compose.yml`, `.env.example`
+   - and commit. They should all land at the repo's top level, sitting
+   next to each other (not inside any subfolder) - if your repo already
+   has files from an earlier attempt in a subfolder, delete those first
+   (select them, then the "..." menu > Delete files) so old and new
+   copies don't end up side by side.
 3. Copy the repo's URL from your browser's address bar, e.g.
    `https://github.com/yourusername/gmail-ai-sorter`.
 
@@ -244,22 +254,24 @@ only connecting a *new* Gmail account needs the public HTTPS URL.
 
 ## 7. Project layout
 
+Everything sits flat at the top level - no subfolders - specifically so a
+GitHub drag-and-drop upload can't lose any nesting (see section 4):
+
 ```
 gmail-ai-sorter/
   Dockerfile
   docker-compose.yml          # Portainer stack
   requirements.txt            # container runtime deps
   .env.example                # template for Portainer's Environment variables box
-  app/
-    main.py                   # entry point: scheduler thread + dashboard server
-    config.py                 # bootstrap secrets (env vars, set once)
-    settings_store.py         # everything the dashboard edits, persisted to /data
-    oauth_web.py               # in-app Google OAuth connect flow
-    web_app.py                 # Flask dashboard (port 4568)
-    pipeline.py                # the actual sort+digest run for one account
-    gmail_client.py            # Gmail REST API wrapper + OAuth refresh
-    ai_client.py                # Gemini REST API wrapper
-    digest_builder.py          # HTML digest matching the spec sections
-    ics_builder.py              # Google Calendar link builder
-    state_store.py             # once-per-day guard across restarts
+  main.py                     # entry point: scheduler thread + dashboard server
+  config.py                   # bootstrap secrets (env vars, set once)
+  settings_store.py           # everything the dashboard edits, persisted to /data
+  oauth_web.py                # in-app Google OAuth connect flow
+  web_app.py                  # Flask dashboard (port 4568)
+  pipeline.py                 # the actual sort+digest run for one account
+  gmail_client.py             # Gmail REST API wrapper + OAuth refresh
+  ai_client.py                 # Gemini REST API wrapper
+  digest_builder.py           # HTML digest matching the spec sections
+  ics_builder.py               # Google Calendar link builder
+  state_store.py              # once-per-day guard across restarts
 ```

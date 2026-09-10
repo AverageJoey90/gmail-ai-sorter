@@ -8,12 +8,12 @@ import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from .ai_client import AiClient
-from .config import BootstrapConfig
-from .digest_builder import DigestData, build_digest_html
-from .gmail_client import GmailClient
-from .oauth_web import token_path_for
-from .settings_store import SettingsStore
+from ai_client import AiClient
+from config import BootstrapConfig
+from digest_builder import DigestData, build_digest_html
+from gmail_client import GmailClient
+from oauth_web import token_path_for
+from settings_store import SettingsStore
 
 log = logging.getLogger(__name__)
 

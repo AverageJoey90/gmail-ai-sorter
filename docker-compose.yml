@@ -2,13 +2,17 @@
 #
 # IMPORTANT: deploy this using Portainer's "Repository" build method (a
 # git repo URL), NOT "Web editor"/"Upload". Those two only ever see this
-# one YAML file - they never receive the sibling Dockerfile/app/ folder,
+# one YAML file - they never receive the sibling Dockerfile/*.py files,
 # so `build:` below fails with "open Dockerfile: no such file or
 # directory" no matter how you paste/upload it. "Repository" clones the
-# WHOLE folder (Dockerfile, requirements.txt, app/, this file) onto the
-# NAS itself and builds from that clone - entirely from the Stacks UI, no
-# SSH or manual `docker build` needed. See README section 4 for the
-# GitHub-upload + Portainer "Repository" walkthrough.
+# WHOLE folder (Dockerfile, requirements.txt, all the .py files, this
+# file) onto the NAS itself and builds from that clone - entirely from
+# the Stacks UI, no SSH or manual `docker build` needed. See README
+# section 4 for the GitHub-upload + Portainer "Repository" walkthrough.
+#
+# All the .py files sit flat at the repo root (no subfolder) on purpose -
+# GitHub's web upload doesn't reliably preserve subfolder structure when
+# you drag files in, which previously broke a `COPY app ./app` step.
 #
 # In Portainer: Stacks > Add stack > Build method: Repository > paste your
 # repo URL, Compose path: docker-compose.yml > in "Environment variables",

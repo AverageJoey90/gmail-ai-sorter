@@ -3,6 +3,12 @@
 # Build this ON the NAS (or with buildx targeting linux/arm64) so the
 # correct architecture's base image layers are pulled automatically -
 # python:3.12-slim publishes multi-arch manifests including arm64/v8.
+#
+# All the project's .py files sit flat at the repo root (no app/
+# subfolder) deliberately - GitHub's web "upload files" drag-and-drop
+# doesn't reliably preserve subfolder structure, which previously broke
+# `COPY app ./app` with "/app: not found". A flat layout has nothing that
+# upload step can flatten by accident.
 FROM python:3.12-slim-bookworm
 
 # Keep Python output unbuffered so logs show up immediately in Portainer's
@@ -17,7 +23,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY app ./app
+COPY *.py ./
 
 # Everything persistent (OAuth tokens, processed-message state, drafted
 # email dedupe records) lives under /data, which the compose file mounts
@@ -30,5 +36,5 @@ VOLUME ["/data"]
 EXPOSE 4568
 
 # main.py starts both the background scheduler thread and the dashboard
-# web server (see app/main.py) - no cron daemon needed, one process.
-CMD ["python", "-m", "app.main"]
+# web server - no cron daemon needed, one process.
+CMD ["python", "main.py"]

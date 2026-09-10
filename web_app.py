@@ -19,10 +19,11 @@ from pathlib import Path
 
 from flask import Flask, redirect, request, session, url_for
 
-from . import oauth_web, pipeline
-from .ai_client import AiClient
-from .config import BootstrapConfig
-from .settings_store import SettingsStore
+import oauth_web
+import pipeline
+from ai_client import AiClient
+from config import BootstrapConfig
+from settings_store import SettingsStore
 
 log = logging.getLogger(__name__)
 

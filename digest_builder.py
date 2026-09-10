@@ -12,7 +12,7 @@ from __future__ import annotations
 import html
 from dataclasses import dataclass, field
 
-from .ics_builder import build_google_calendar_link
+from ics_builder import build_google_calendar_link
 
 STYLE = """
 body{font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#1a1a1a;background:#f5f5f5;margin:0;padding:16px}

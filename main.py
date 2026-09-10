@@ -23,11 +23,11 @@ from zoneinfo import ZoneInfo
 
 from waitress import serve
 
-from . import pipeline
-from .config import load_bootstrap_config
-from .settings_store import SettingsStore
-from .state_store import StateStore
-from .web_app import create_app
+import pipeline
+from config import load_bootstrap_config
+from settings_store import SettingsStore
+from state_store import StateStore
+from web_app import create_app
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("main")
