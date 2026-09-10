@@ -1,0 +1,61 @@
+# Portainer Stack YAML for the Asustor AS1102T (ARM64/aarch64).
+#
+# IMPORTANT: deploy this using Portainer's "Repository" build method (a
+# git repo URL), NOT "Web editor"/"Upload". Those two only ever see this
+# one YAML file - they never receive the sibling Dockerfile/app/ folder,
+# so `build:` below fails with "open Dockerfile: no such file or
+# directory" no matter how you paste/upload it. "Repository" clones the
+# WHOLE folder (Dockerfile, requirements.txt, app/, this file) onto the
+# NAS itself and builds from that clone - entirely from the Stacks UI, no
+# SSH or manual `docker build` needed. See README section 4 for the
+# GitHub-upload + Portainer "Repository" walkthrough.
+#
+# In Portainer: Stacks > Add stack > Build method: Repository > paste your
+# repo URL, Compose path: docker-compose.yml > in "Environment variables",
+# switch to Advanced mode and paste every line from .env.example with
+# real values filled in > Deploy. Since the build happens on the NAS
+# itself (ARM64), the correct architecture is picked up automatically.
+#
+# Nothing else needs doing on the NAS after that: which Gmail accounts are
+# connected, the daily schedule, confidence threshold, and ignore list are
+# all set from the dashboard at https://<PUBLIC_BASE_URL>/ (or
+# http://<nas-lan-ip>:4568/ once you're on the home network) - see README.
+services:
+  gmail-ai-sorter:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: gmail-ai-sorter:latest
+    container_name: gmail-ai-sorter
+    restart: unless-stopped
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.5-flash}
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
+      - PUBLIC_BASE_URL=${PUBLIC_BASE_URL}
+      - DASHBOARD_PASSWORD=${DASHBOARD_PASSWORD}
+      - TZ=${TZ:-Europe/London}
+      - PORT=4568
+    ports:
+      # Reachable directly on the home LAN at http://<nas-ip>:4568/ too -
+      # useful day-to-day so you're not always going through the public
+      # URL. The initial "Connect Gmail account" step still needs to
+      # happen via PUBLIC_BASE_URL (see README) because that's the only
+      # address Google's OAuth redirect is registered to.
+      - "4568:4568"
+    volumes:
+      # Holds each connected account's token.json, settings.json (schedule,
+      # confidence threshold, ignore list, digest recipients - everything
+      # set from the dashboard), and the Flask session signing key.
+      # Survives stack updates/recreation - do NOT delete this volume
+      # without reconnecting every Gmail account again afterwards.
+      - gmail-ai-sorter-data:/data
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  gmail-ai-sorter-data:
