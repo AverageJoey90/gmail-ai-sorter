@@ -23,15 +23,20 @@ tailscale_hostname is currently resolved:
 - The daemon process exits on its own: treated the same as if nothing were
   configured yet, so the next tick starts the whole sequence fresh.
 
-Why this needs real (not userspace) networking: Tailscale's own
-`--tun=userspace-networking` mode is known to break Funnel's TLS handshake
-in some versions (a node reports success but HTTPS requests fail). Real
-kernel TUN mode avoids that, but needs the container to have `NET_ADMIN`
-(and `NET_RAW`) capabilities and access to `/dev/net/tun` - see the
-`cap_add`/`devices` lines in docker-compose.yml - and, in practice, root
-inside the container, which is why this image no longer drops to a
-non-root user (see the Dockerfile comment). This is a home NAS on your own
-private network, so that trade-off is a reasonable one here.
+Why userspace networking: real kernel TUN mode needs a `/dev/net/tun`
+device node on the *host* kernel, which not every NAS/embedded Linux build
+provides (Asustor's AS1102T doesn't) - trying to pass that device through
+in docker-compose.yml fails the whole deployment outright ("no such file
+or directory") rather than just disabling Tailscale, so it's not usable
+here at all. `--tun=userspace-networking` avoids needing that device or
+any special capabilities, at the cost of being slightly slower - fine for
+this use case, since Funnel is just proxying HTTP requests to a local
+Flask app, not routing general network traffic. One known wrinkle: some
+Tailscale versions have a bug where Funnel's TLS handshake silently fails
+in userspace mode specifically when running as a non-root user - so this
+container still runs as root (see the Dockerfile comment) even though
+userspace mode itself doesn't otherwise require it, purely to route around
+that bug.
 
 `tailscale`/`tailscaled`'s own stdout/stderr are left to inherit this
 process's, so their logs show up in the container's normal log output
@@ -93,7 +98,12 @@ class TailscaleManager:
         os.makedirs(os.path.dirname(SOCKET_PATH), exist_ok=True)
         try:
             self._daemon = subprocess.Popen(
-                ["tailscaled", f"--state={STATE_DIR}/tailscaled.state", f"--socket={SOCKET_PATH}"]
+                [
+                    "tailscaled",
+                    f"--state={STATE_DIR}/tailscaled.state",
+                    f"--socket={SOCKET_PATH}",
+                    "--tun=userspace-networking",
+                ]
             )
         except Exception:
             log.exception("Failed to start tailscaled")

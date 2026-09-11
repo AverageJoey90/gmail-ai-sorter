@@ -343,13 +343,17 @@ project's own image and run as background processes supervised from
 inside `main.py` (see `tailscale_manager.py`) - the moment
 `TAILSCALE_AUTH_KEY` is present, it starts the daemon, joins your tailnet,
 and turns on Funnel for the dashboard's port automatically; clearing the
-key later stops it. This needs real kernel networking rather than
-Tailscale's more restricted "userspace" mode (which has known issues with
-Funnel specifically), which is why `docker-compose.yml` grants this
-container the `NET_ADMIN`/`NET_RAW` capabilities and a `/dev/net/tun`
-device, and why the image runs as root rather than dropping to a
-non-root user - a reasonable trade-off for a single-purpose container on
-your own private NAS.
+key later stops it. `tailscaled` runs in Tailscale's "userspace
+networking" mode specifically, which needs no special container
+permissions or devices at all - real kernel-mode networking would need a
+`/dev/net/tun` device on the NAS's own kernel, which many NAS/embedded
+Linux builds (the AS1102T included) simply don't provide, so it's not an
+option here. The one thing userspace mode does need is for the container
+to run as root rather than a dropped-privilege user - some Tailscale
+versions have a known bug where Funnel's TLS handshake silently fails in
+userspace mode under a non-root user, so this image stays root to avoid
+it. A reasonable trade-off for a single-purpose container on your own
+private NAS.
 
 ## 4. Deploy the stack - entirely from Portainer, no SSH
 

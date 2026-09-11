@@ -51,9 +51,12 @@
 # the Setup page like the token above. TAILSCALE_HOSTNAME is optional too
 # (defaults to "gmail-ai-sorter") and becomes part of the public URL. The
 # app runs `tailscaled`/`tailscale` itself as supervised background
-# processes (see tailscale_manager.py) the moment an auth key is present -
-# this is the one route that needs the `cap_add`/`devices` lines below,
-# since Tailscale Funnel needs real kernel networking to work reliably.
+# processes (see tailscale_manager.py) the moment an auth key is present,
+# using Tailscale's "userspace networking" mode specifically so this
+# doesn't need a `/dev/net/tun` device or extra capabilities - many NAS/
+# embedded Linux kernels (including the AS1102T's) don't expose that
+# device at all, and trying to pass it through fails the whole deployment
+# outright rather than just disabling this one feature.
 #
 # Whichever route(s) you leave blank, nothing extra runs - see README
 # section 6 "Known caveats".
@@ -65,14 +68,6 @@ services:
     image: gmail-ai-sorter:latest
     container_name: gmail-ai-sorter
     restart: unless-stopped
-    # Only actually needed for Route C (Tailscale Funnel) - see the comment
-    # block above and tailscale_manager.py. Harmless to leave in place even
-    # if you're using Route A or B instead.
-    cap_add:
-      - NET_ADMIN
-      - NET_RAW
-    devices:
-      - /dev/net/tun:/dev/net/tun
     environment:
       # All optional - see the comment block above. Blank is fine; fill
       # these in later from the dashboard's Setup page instead.

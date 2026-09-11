@@ -62,14 +62,16 @@ COPY *.py ./
 RUN mkdir -p /data
 
 # This container runs as root (no `USER` drop here), which is a change
-# from earlier versions of this image. Reason: Tailscale Funnel (Route C)
-# needs real kernel networking (a `/dev/net/tun` device plus the
-# NET_ADMIN/NET_RAW capabilities granted in docker-compose.yml) rather than
-# its slower, less reliable userspace-networking fallback - and those
-# capabilities are only usable by root inside the container. If you're not
-# using Route C (Tailscale) this doesn't buy you anything extra, but it
-# also doesn't cost anything extra either - this is a single-purpose
-# container on your own private home NAS, not multi-tenant infrastructure.
+# from earlier versions of this image. Reason: Tailscale (Route C) runs in
+# "userspace networking" mode here (see tailscale_manager.py) since many
+# NAS/embedded kernels - including the AS1102T's - don't expose a
+# /dev/net/tun device for real kernel-mode networking, and some Tailscale
+# versions have a known bug where Funnel's TLS handshake silently fails in
+# userspace mode specifically when running as a non-root user. Staying
+# root sidesteps that bug. If you're not using Route C (Tailscale) this
+# doesn't buy you anything extra, but it also doesn't cost anything extra
+# either - this is a single-purpose container on your own private home
+# NAS, not multi-tenant infrastructure.
 VOLUME ["/data"]
 
 # Dashboard (Gmail connect, settings, run-now).
