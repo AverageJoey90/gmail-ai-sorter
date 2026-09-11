@@ -1,7 +1,0 @@
-# Runtime dependencies for the container. Kept to pure-python packages
-# (no compiler/toolchain needed) so it builds fast and cleanly on ARM64.
-requests>=2.31,<3
-google-auth>=2.29,<3
-google-auth-oauthlib>=1.2,<2   # in-app OAuth "Connect Gmail account" flow
-Flask>=3.0,<4                  # dashboard on port 4568
-waitress>=3.0,<4                # production WSGI server for the dashboard
