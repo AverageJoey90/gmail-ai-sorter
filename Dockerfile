@@ -9,6 +9,12 @@
 # doesn't reliably preserve subfolder structure, which previously broke
 # `COPY app ./app` with "/app: not found". A flat layout has nothing that
 # upload step can flatten by accident.
+
+# Multi-stage: pull the tailscale/tailscaled binaries straight out of
+# Tailscale's own official multi-arch image (arm64 included) rather than
+# chasing a version-pinned tarball URL by hand - see tailscale_manager.py.
+FROM tailscale/tailscale:stable AS tailscale
+
 FROM python:3.12-slim-bookworm
 
 # Keep Python output unbuffered so logs show up immediately in Portainer's
@@ -41,18 +47,35 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 ADD https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64 /usr/local/bin/cloudflared
 RUN chmod +x /usr/local/bin/cloudflared
 
+# tailscale + tailscaled, copied from the official image built in the
+# `tailscale` stage above (see tailscale_manager.py). Bundled
+# unconditionally, same as cloudflared - harmless if you never set a
+# Tailscale auth key.
+COPY --from=tailscale /usr/local/bin/tailscale /usr/local/bin/tailscaled /usr/local/bin/
+
 COPY *.py ./
 
 # Everything persistent (OAuth tokens, processed-message state, drafted
-# email dedupe records) lives under /data, which the compose file mounts
-# as a volume so it survives container recreation/updates.
-RUN mkdir -p /data && useradd --create-home --uid 1000 sorter && chown -R sorter:sorter /app /data
-USER sorter
+# email dedupe records, and - if you use Route C - Tailscale's own node
+# state) lives under /data, which the compose file mounts as a volume so
+# it survives container recreation/updates.
+RUN mkdir -p /data
+
+# This container runs as root (no `USER` drop here), which is a change
+# from earlier versions of this image. Reason: Tailscale Funnel (Route C)
+# needs real kernel networking (a `/dev/net/tun` device plus the
+# NET_ADMIN/NET_RAW capabilities granted in docker-compose.yml) rather than
+# its slower, less reliable userspace-networking fallback - and those
+# capabilities are only usable by root inside the container. If you're not
+# using Route C (Tailscale) this doesn't buy you anything extra, but it
+# also doesn't cost anything extra either - this is a single-purpose
+# container on your own private home NAS, not multi-tenant infrastructure.
 VOLUME ["/data"]
 
 # Dashboard (Gmail connect, settings, run-now).
 EXPOSE 4568
 
-# main.py starts the background scheduler thread, the tunnel-manager
-# thread, and the dashboard web server, all in this one process.
+# main.py starts the background scheduler thread, the Cloudflare
+# tunnel-manager thread, the Tailscale manager thread, and the dashboard
+# web server, all in this one process.
 CMD ["python", "main.py"]

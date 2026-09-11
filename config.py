@@ -1,6 +1,7 @@
 """Bootstrap configuration: the handful of secrets the app needs to do
 anything useful (Gemini key, Google OAuth client, public URL, dashboard
-password, and an optional Cloudflare Tunnel token - see tunnel_manager.py).
+password, and optional Cloudflare Tunnel / Tailscale Funnel settings - see
+tunnel_manager.py and tailscale_manager.py).
 
 These can be set as env vars in the Portainer stack, but don't have to be
 - if any are missing, the dashboard boots anyway and shows a Setup page
@@ -24,9 +25,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 # The fields the Setup page can fill in. Only these 5 are mandatory before
-# the rest of the dashboard unlocks - gemini_model has a sensible default
-# and cloudflare_tunnel_token is entirely optional (see tunnel_manager.py),
-# so neither is ever "missing".
+# the rest of the dashboard unlocks - gemini_model has a sensible default,
+# and cloudflare_tunnel_token / tailscale_auth_key / tailscale_hostname are
+# entirely optional (see tunnel_manager.py and tailscale_manager.py), so
+# none of those three is ever "missing".
 REQUIRED_FIELDS = (
     "gemini_api_key",
     "google_client_id",
@@ -49,6 +51,8 @@ class BootstrapConfig:
     public_base_url: str  # e.g. https://joe123.myasustor.com:8443 (no trailing slash)
     dashboard_password: str
     cloudflare_tunnel_token: str  # optional - see tunnel_manager.py
+    tailscale_auth_key: str  # optional - see tailscale_manager.py
+    tailscale_hostname: str  # optional - see tailscale_manager.py
     data_dir: str
     port: int
     flask_secret_key: str
@@ -133,6 +137,8 @@ class BootstrapStore:
             public_base_url=pick("public_base_url", "PUBLIC_BASE_URL").rstrip("/"),
             dashboard_password=pick("dashboard_password", "DASHBOARD_PASSWORD"),
             cloudflare_tunnel_token=pick("cloudflare_tunnel_token", "CLOUDFLARE_TUNNEL_TOKEN"),
+            tailscale_auth_key=pick("tailscale_auth_key", "TAILSCALE_AUTH_KEY"),
+            tailscale_hostname=pick("tailscale_hostname", "TAILSCALE_HOSTNAME", "gmail-ai-sorter"),
             data_dir=self.data_dir,
             port=int(_env("PORT", "4568") or "4568"),
             flask_secret_key=_load_or_create_secret_key(self.data_dir),

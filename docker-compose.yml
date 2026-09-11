@@ -35,16 +35,28 @@
 # all set from the dashboard at https://<PUBLIC_BASE_URL>/ (or
 # http://<nas-lan-ip>:4568/ once you're on the home network) - see README.
 #
-# HTTPS via Cloudflare Tunnel (recommended - see README "Expose the NAS
-# over HTTPS" section, Route A): CLOUDFLARE_TUNNEL_TOKEN is also entirely
-# optional and works exactly like the 5 above - set it here, or paste it
-# into the dashboard's own Setup page (/setup, reachable anytime) instead.
-# Either way, the app runs `cloudflared` itself as a supervised background
-# process (see tunnel_manager.py) the moment a token is present - no
-# separate container, no router port-forwarding, and no certificate to
-# manage on the NAS at all; Cloudflare issues and renews it for you. Leave
-# it blank if you're using the NAS's own EZ-Connect/Reverse Proxy route
-# instead (Route B) - nothing extra runs.
+# HTTPS - three routes, see README "Expose the NAS over HTTPS" section:
+#
+# Route A (Cloudflare Tunnel, needs a domain you own): CLOUDFLARE_TUNNEL_TOKEN
+# is entirely optional and works exactly like the 5 above - set it here, or
+# paste it into the dashboard's own Setup page (/setup, reachable anytime)
+# instead. Either way, the app runs `cloudflared` itself as a supervised
+# background process (see tunnel_manager.py) the moment a token is present.
+#
+# Route B (Asustor's own EZ-Connect/Certificate Manager/Reverse Proxy): no
+# extra env vars here - it's all configured on the NAS itself.
+#
+# Route C (Tailscale Funnel, recommended £0 option - no domain, no router
+# changes): TAILSCALE_AUTH_KEY is also entirely optional, set here or via
+# the Setup page like the token above. TAILSCALE_HOSTNAME is optional too
+# (defaults to "gmail-ai-sorter") and becomes part of the public URL. The
+# app runs `tailscaled`/`tailscale` itself as supervised background
+# processes (see tailscale_manager.py) the moment an auth key is present -
+# this is the one route that needs the `cap_add`/`devices` lines below,
+# since Tailscale Funnel needs real kernel networking to work reliably.
+#
+# Whichever route(s) you leave blank, nothing extra runs - see README
+# section 6 "Known caveats".
 services:
   gmail-ai-sorter:
     build:
@@ -53,6 +65,14 @@ services:
     image: gmail-ai-sorter:latest
     container_name: gmail-ai-sorter
     restart: unless-stopped
+    # Only actually needed for Route C (Tailscale Funnel) - see the comment
+    # block above and tailscale_manager.py. Harmless to leave in place even
+    # if you're using Route A or B instead.
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    devices:
+      - /dev/net/tun:/dev/net/tun
     environment:
       # All optional - see the comment block above. Blank is fine; fill
       # these in later from the dashboard's Setup page instead.
@@ -63,6 +83,8 @@ services:
       - PUBLIC_BASE_URL=${PUBLIC_BASE_URL:-}
       - DASHBOARD_PASSWORD=${DASHBOARD_PASSWORD:-}
       - CLOUDFLARE_TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN:-}
+      - TAILSCALE_AUTH_KEY=${TAILSCALE_AUTH_KEY:-}
+      - TAILSCALE_HOSTNAME=${TAILSCALE_HOSTNAME:-gmail-ai-sorter}
       - TZ=${TZ:-Europe/London}
       - PORT=4568
     ports:
@@ -75,9 +97,13 @@ services:
     volumes:
       # Holds each connected account's token.json, settings.json (schedule,
       # confidence threshold, ignore list, digest recipients - everything
-      # set from the dashboard), and the Flask session signing key.
-      # Survives stack updates/recreation - do NOT delete this volume
-      # without reconnecting every Gmail account again afterwards.
+      # set from the dashboard), the Flask session signing key, and (if
+      # using Route C) Tailscale's own node state - which is what makes
+      # its https://...ts.net address stable across restarts instead of
+      # generating a new device/URL every time. Survives stack
+      # updates/recreation - do NOT delete this volume without
+      # reconnecting every Gmail account (and re-authenticating Tailscale,
+      # if used) again afterwards.
       - gmail-ai-sorter-data:/data
     logging:
       driver: json-file

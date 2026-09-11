@@ -100,12 +100,26 @@ def create_app(bootstrap_store: BootstrapStore, store: SettingsStore) -> Flask:
             "Route A). Leave blank if you're getting HTTPS a different way. Starting, changing, or "
             "clearing this takes effect within about 15 seconds - no redeploy needed.",
         ),
+        "tailscale_auth_key": (
+            "Tailscale auth key",
+            "text",
+            "Optional - only needed if you're using Tailscale Funnel for HTTPS (README section 3, "
+            "Route C - free, no domain needed). Generate a reusable key at "
+            "login.tailscale.com/admin/settings/keys. Leave blank if you're getting HTTPS a "
+            "different way. Takes effect within about 15 seconds - no redeploy needed.",
+        ),
+        "tailscale_hostname": (
+            "Tailscale hostname",
+            "text",
+            "Optional - only used alongside the auth key above. Defaults to \"gmail-ai-sorter\" if "
+            "left blank; this becomes part of your public URL, e.g. https://gmail-ai-sorter.<your-tailnet>.ts.net.",
+        ),
     }
 
     # Fields that are never echoed back into the form once set - just a
     # placeholder note instead, so this page can't leak an already-saved
     # secret to anyone who loads it.
-    SECRET_FIELDS = ("google_client_secret", "dashboard_password", "cloudflare_tunnel_token")
+    SECRET_FIELDS = ("google_client_secret", "dashboard_password", "cloudflare_tunnel_token", "tailscale_auth_key")
 
     @app.get("/setup")
     def setup_form():

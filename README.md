@@ -59,22 +59,29 @@ this project, and it's why "Connect a Gmail account" has to happen via a
 public HTTPS URL rather than your NAS's local IP.
 
 The good news: this is a one-time setup, not an ongoing chore, and
-section 3 below covers two ways to do it:
+section 3 below covers three ways to do it:
 
-- **Cloudflare Tunnel (recommended)** - `cloudflared` is bundled into this
-  project's own image and runs as a background process the app manages
-  itself, making an outbound-only connection to Cloudflare so there's no
-  router port-forwarding and no certificate to issue or renew on the NAS
-  at all - Cloudflare handles the HTTPS certificate for you, and the
-  token that turns it on can be typed straight into the dashboard's Setup
-  page, same as every other secret. The only things this needs that
-  Asustor's own route doesn't: a domain name you own (a cheap one is fine, a few
-  dollars a year) and its DNS pointed at Cloudflare (free, no card
-  needed).
-- **Asustor's own EZ-Connect + Certificate Manager + Reverse Proxy** -
-  no domain purchase needed (uses a free `myasustor.com` subdomain
-  instead), but you're managing the certificate and a router port
-  forward yourself, and the Let's Encrypt step there can be finicky.
+- **Tailscale Funnel (recommended, £0)** - `tailscale`/`tailscaled` are
+  bundled into this project's own image and run as background processes
+  the app manages itself, making an outbound-only connection so there's no
+  router port-forwarding, no domain to buy, and no certificate to issue or
+  renew - Tailscale handles all of that, and the auth key that turns it on
+  can be typed straight into the dashboard's Setup page, same as every
+  other secret. This is the option that needed the least fighting with
+  routers and DNS in practice.
+- **Cloudflare Tunnel** - `cloudflared` is bundled the same way. Also no
+  router port-forwarding and no certificate to manage, but it needs a
+  domain name you own (a cheap one is fine, a few dollars a year) and its
+  DNS pointed at Cloudflare (free, no card needed) - worth it if you
+  already have a domain, or want a URL under your own name rather than a
+  `.ts.net` one.
+- **Asustor's own EZ-Connect + Certificate Manager + Reverse Proxy** - no
+  domain purchase needed (uses a free DDNS subdomain instead), but you're
+  managing the certificate and a router port forward yourself, the Let's
+  Encrypt step there can be finicky, and EZ-Connect's DNS can end up
+  pointing at Asustor's own relay servers rather than your home IP
+  depending on how it auto-configures - see Route B below for the details
+  and workaround.
 
 Once whichever route is set up, the dashboard itself works fine over
 plain `http://<nas-ip>:4568/` on your home network for everyday use
@@ -134,13 +141,15 @@ without changing any code:
 
 ## 3. Expose the NAS over HTTPS
 
-Two routes - pick one. Cloudflare Tunnel is recommended: no router
-changes, no certificate to issue or renew, and it sidesteps the Asustor
-Certificate Manager's Let's Encrypt errors entirely (a known rough edge -
-"ACME Client has encountered an issue" / "Ref. 5401" are both this same
-underlying HTTP-validation problem, not something wrong with your NAS).
+Three routes - pick one. **Tailscale Funnel (Route C) is recommended**: £0,
+no router changes, no domain to buy, no certificate to issue or renew, and
+it sidesteps the Asustor Certificate Manager's Let's Encrypt errors
+entirely (a known rough edge - "ACME Client has encountered an issue" /
+"Ref. 5401"/"Ref. 5056" are all the same underlying HTTP-validation
+problem, not something wrong with your NAS - see Route B below if you want
+the details anyway).
 
-### Route A: Cloudflare Tunnel (recommended)
+### Route A: Cloudflare Tunnel (needs a domain you own)
 
 **What you need first**: a domain name you own. If you don't have one
 already, the simplest path is buying one directly through Cloudflare
@@ -210,33 +219,78 @@ file the rest of the Setup page already writes to.
 
 ### Route B: Asustor's own EZ-Connect + Certificate Manager + Reverse Proxy
 
-Skip this if you've done Route A above.
+Skip this if you've done Route A or C. **This route turned out to be the
+most fiddly in practice** - the notes below include the real problems hit
+while setting this up, not just the happy path.
 
 1. **ADM > EZ-Connect** (or **Settings > EZ-Connect**): register a free
-   `myasustor.com` subdomain if you don't already have one, e.g.
-   `joe123.myasustor.com`. This is your DDNS hostname - it follows your
-   home IP even if it changes.
+   DDNS subdomain if you don't already have one. The exact domain suffix
+   Asustor hands out has changed over time and can vary by account/region
+   (`.myasustor.com` in older docs, `.ezconnect.to` currently seen) - check
+   your own EZ-Connect settings page for the exact hostname it actually
+   gives you (shown next to "ADM:", e.g. `http://yourcloudid.ezconnect.to`)
+   rather than assuming either suffix. This is your DDNS hostname - it's
+   meant to follow your home IP even if it changes.
+   - **Known issue**: if the EZ-Connect wizard's "EZ-Router" step fails
+     (e.g. "No UPnP/NAT-PMP router found") but "Internet Passthrough"
+     reports success anyway, EZ-Connect may fall back to routing your
+     hostname through **Asustor's own cloud relay** rather than pointing
+     DNS directly at your home IP. You can check this yourself: look up
+     your hostname on <https://dnschecker.org> (record type A) and compare
+     the IP it shows against your own public IP (check
+     <https://whatismyip.com> on mobile data, not home WiFi). If they
+     don't match - especially if the resolved IP belongs to a cloud
+     provider like AWS rather than your ISP - the certificate/port-80
+     validation steps below cannot work no matter how correctly your
+     router is configured, because requests to that hostname never reach
+     your NAS at all. If you hit this, either try enabling UPnP on your
+     router and re-running the EZ-Connect wizard (so it can set up direct
+     mode instead of relay mode), or switch to a plain third-party DDNS
+     provider instead - **DuckDNS** (duckdns.org, free, no relay) is a
+     simple option: create a subdomain there, then check whether your
+     NAS's DDNS settings screen (**Settings > EZ-Connect > DDNS** or
+     **Settings > Network > DDNS**, depending on ADM version) lists it (or
+     "Custom") as a provider so the NAS keeps it updated automatically.
+     Use whichever hostname you end up with (`....ezconnect.to` or
+     `....duckdns.org`) for every step below.
 2. **ADM > Settings > Security > Certificate Manager** (menu wording
    varies slightly by ADM version): add a new certificate, choose
-   **Let's Encrypt**, and issue it for your `myasustor.com` hostname. It
-   auto-renews.
-   - **Domain name field**: enter the *full* hostname
-     (`joe123.myasustor.com`), not just the subdomain prefix - a
-     truncated entry here is a common cause of "Unable to apply settings
-     (Ref. 5401)".
+   **Let's Encrypt**, and issue it for your hostname from step 1. It
+   auto-renews (tick "Update automatically when certificates expire").
+   - **Domain name field**: enter the *bare full hostname* only - no
+     `http://` prefix, no path, no trailing slash (e.g.
+     `yourcloudid.ezconnect.to`, not `http://yourcloudid`) - a stray
+     prefix or a truncated entry are both common causes of "Unable to
+     apply settings (Ref. 5401)" / "...is invalid... (Ref. 5056)".
    - **Port 80 must be forwarded** from your router to the NAS's LAN IP
      before you click Finish - Let's Encrypt briefly connects over plain
-     HTTP to verify you own the domain, and this fails silently
-     (producing the same Ref. 5401 error) if port 80 isn't reachable from
-     the internet at that moment. It needs to stay forwarded afterwards
-     too, since the certificate renews itself the same way periodically.
-   - If it still fails after both of those are correct, confirm the
-     hostname actually resolves by opening `http://joe123.myasustor.com`
-     from your phone on mobile data (not home WiFi) - it should attempt a
-     connection rather than showing a DNS/"server not found" error.
+     HTTP to verify you own the domain, and this fails (producing the
+     same Ref. 5401/5056 errors) if port 80 isn't reachable from the
+     internet at that moment, or if your home network has a double-NAT
+     setup (e.g. an ISP modem/router in front of your own router, both
+     doing NAT) - in that case port forwarding on just one of them isn't
+     enough; either put the ISP device into "modem"/bridge mode so only
+     your own router does NAT, or forward the port on both hops. It needs
+     to stay forwarded afterwards too, since the certificate renews
+     itself the same way periodically.
+   - Testing port 80 directly (from outside your own network) with
+     <https://canyouseeme.org> is a fast way to check this in isolation
+     from the certificate wizard: "Connection refused" there means
+     traffic *is* reaching your NAS but nothing's listening on port 80 at
+     that exact moment - normal outside an active certificate request,
+     since Asustor only opens port 80 briefly during validation itself.
+     "Connection timed out" instead usually means the traffic never
+     leaves your network at all (check port forwarding, double-NAT, or
+     ask your ISP whether you have a genuine static public IP vs. a
+     shared/CGNAT one, which cannot be port-forwarded).
+   - If it still fails after all of the above check out, confirm the
+     hostname actually resolves to your real public IP (see the DNS check
+     under step 1) and that it attempts a connection (rather than a
+     DNS/"server not found" error) when opened from your phone on mobile
+     data.
 3. **ADM > Settings > Services > Reverse Proxy**: add a new proxy domain:
-   - Protocol: HTTPS, Server name: your `myasustor.com` hostname, Port:
-     an unused external port (e.g. `8443` - avoid `443` if something else
+   - Protocol: HTTPS, Server name: your hostname from step 1, Port: an
+     unused external port (e.g. `8443` - avoid `443` if something else
      already uses it), certificate: the one from step 2.
    - Under that proxy domain, add a rule routing to: Protocol HTTP,
      Hostname/IP: the NAS's own LAN IP (or `localhost`), Port `4568`.
@@ -246,12 +300,56 @@ Skip this if you've done Route A above.
 4. **Router**: forward the external port you chose (e.g. `8443`, TCP) to
    the NAS's LAN IP on that same port, so traffic from the internet
    actually reaches the NAS.
-5. Your `PUBLIC_BASE_URL` is now `https://joe123.myasustor.com:8443` (no
+5. Your `PUBLIC_BASE_URL` is now `https://<your hostname>:8443` (no
    trailing slash) - use this exact value in both the Google Cloud
    redirect URI (step 2.5 above) and the stack's environment variables.
    Test it in a browser before deploying the stack - you should get a
    connection refused/404 (nothing's listening on 4568 yet), not a
    certificate warning or DNS failure.
+
+### Route C: Tailscale Funnel (recommended, £0, no router changes)
+
+1. **Create a free Tailscale account** at <https://login.tailscale.com/start>
+   (sign in with Google/GitHub/Microsoft - no card needed) if you don't
+   already have one.
+2. **Generate a reusable auth key**: go to
+   <https://login.tailscale.com/admin/settings/keys> > **Generate auth
+   key**. Turn **Reusable** on (so the same key still works if the
+   container ever needs to re-authenticate) and leave **Ephemeral** off
+   (so the node - and its URL - stays permanent rather than disappearing
+   when offline). Copy the key (starts `tskey-auth-...`) - it's only shown
+   once.
+3. Paste that key into `TAILSCALE_AUTH_KEY` - either in Portainer's stack
+   environment variables (deploy the stack first if you haven't yet - see
+   section 4 - then edit the environment variables and redeploy), **or**
+   into the dashboard's own **Setup page** at `/setup` (reachable anytime)
+   if the stack's already running. The Setup page route takes effect
+   within about 15 seconds with no redeploy needed. Optionally also set
+   `TAILSCALE_HOSTNAME` (defaults to `gmail-ai-sorter` if left blank) - it
+   becomes part of your public URL.
+4. Within about 15-30 seconds of the key being picked up, check the
+   container's logs (Portainer > Stacks > gmail-ai-sorter > Logs) for a
+   line like `Tailscale Funnel is live: https://gmail-ai-sorter.<your-
+   tailnet>.ts.net` - that's your public URL.
+5. Your `PUBLIC_BASE_URL` is that exact URL (no trailing slash, no port
+   needed - Funnel serves over standard HTTPS). Use it in both the Google
+   Cloud redirect URI (step 2.5 above) and `PUBLIC_BASE_URL`. No router
+   port-forwarding, no certificate, no domain purchase, and the URL stays
+   the same across container restarts as long as the `/data` volume
+   persists (see section 7).
+
+**How this actually runs**: `tailscale`/`tailscaled` are bundled into this
+project's own image and run as background processes supervised from
+inside `main.py` (see `tailscale_manager.py`) - the moment
+`TAILSCALE_AUTH_KEY` is present, it starts the daemon, joins your tailnet,
+and turns on Funnel for the dashboard's port automatically; clearing the
+key later stops it. This needs real kernel networking rather than
+Tailscale's more restricted "userspace" mode (which has known issues with
+Funnel specifically), which is why `docker-compose.yml` grants this
+container the `NET_ADMIN`/`NET_RAW` capabilities and a `/dev/net/tun`
+device, and why the image runs as root rather than dropping to a
+non-root user - a reasonable trade-off for a single-purpose container on
+your own private NAS.
 
 ## 4. Deploy the stack - entirely from Portainer, no SSH
 
@@ -305,8 +403,9 @@ flat, there's no nesting for the upload to lose.
    prefer to set them here up front instead, switch to "Advanced mode" (a
    plain textarea) and paste in the lines from `.env.example` you want
    filled in: `GEMINI_API_KEY`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`,
-   `PUBLIC_BASE_URL`, `DASHBOARD_PASSWORD`, and (if using Route A in
-   section 3) `CLOUDFLARE_TUNNEL_TOKEN`.
+   `PUBLIC_BASE_URL`, `DASHBOARD_PASSWORD`, and (if using Route C in
+   section 3) `TAILSCALE_AUTH_KEY`/`TAILSCALE_HOSTNAME`, or (if using
+   Route A) `CLOUDFLARE_TUNNEL_TOKEN`.
 4. Deploy. Portainer clones the repo onto the NAS and builds the image
    there - since that's the NAS's own ARM64 engine, the image comes out
    ARM64 automatically, no cross-build flags needed. The first build
@@ -322,7 +421,7 @@ with no terminal involved.
 ## 5. First run
 
 1. Open `PUBLIC_BASE_URL` in a browser (e.g.
-   `https://joe123.myasustor.com:8443/`).
+   `https://gmail-ai-sorter.yourtailnet.ts.net/` if you used Route C).
    - **If you left the environment variables blank in Step B**, you'll
      land on a **Setup page** instead of the login screen. Fill in the
      Gemini key, Google OAuth client ID/secret, public base URL, and a
@@ -350,11 +449,17 @@ only connecting a *new* Gmail account needs the public HTTPS URL.
 
 ## 6. Known caveats
 
-- **`cloudflared` being bundled into the image is harmless if you never
-  use it** - with `CLOUDFLARE_TUNNEL_TOKEN` left blank (e.g. you went
-  with Route B in section 3 instead), the background thread that would
-  manage it just never starts a process. No extra resource use, no log
-  spam, nothing to disable.
+- **`cloudflared` and `tailscale`/`tailscaled` being bundled into the
+  image are harmless if you never use one or both of them** - with
+  `CLOUDFLARE_TUNNEL_TOKEN` and/or `TAILSCALE_AUTH_KEY` left blank (e.g.
+  you went with Route B in section 3 instead), the background thread(s)
+  that would manage them just never start a process. No extra resource
+  use, no log spam, nothing to disable.
+- **This image runs as root inside the container** (not a non-root user)
+  - a deliberate trade-off so Tailscale Funnel (Route C) can use real
+    kernel networking rather than a less reliable fallback mode. Fine for
+    a single-purpose container on your own private NAS; worth knowing if
+    you're used to non-root-by-default images.
 - **The Setup page is always reachable at `/setup`**, even after it's
   been completed once - handy if a value changes (a rotated Gemini key,
   a new NAS domain) and you'd rather update it from the browser than
@@ -394,6 +499,7 @@ gmail-ai-sorter/
   main.py                     # entry point: scheduler + tunnel manager threads, dashboard server
   config.py                   # bootstrap secrets (env vars, or entered via the Setup page)
   tunnel_manager.py           # supervises the optional Cloudflare Tunnel subprocess
+  tailscale_manager.py        # supervises the optional Tailscale Funnel processes
   settings_store.py           # everything the dashboard edits, persisted to /data
   oauth_web.py                # in-app Google OAuth connect flow
   web_app.py                  # Flask dashboard (port 4568)
