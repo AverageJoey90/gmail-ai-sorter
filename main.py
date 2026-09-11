@@ -1,8 +1,12 @@
 """Entry point. Starts four things in one process:
 
 1. A background daemon thread running the daily scheduler - checks every
-   60s whether it's time for the configured RUN_AT_LOCAL_TIME and, if so,
-   runs every connected account's sort+digest pipeline once.
+   60s whether it's time for each connected account's own run time (an
+   optional per-account override, falling back to the global
+   RUN_AT_LOCAL_TIME default) and, if so, runs that account's sort+digest
+   pipeline once. Two accounts can therefore fire at different times of
+   day, each independently tracked so a later-in-the-day account isn't
+   skipped just because an earlier one already ran today.
 2. A background daemon thread supervising an optional Cloudflare Tunnel
    subprocess (see tunnel_manager.py) - reacts within seconds to a tunnel
    token being entered, changed, or cleared on the dashboard's Setup page.
@@ -31,6 +35,7 @@ from zoneinfo import ZoneInfo
 from waitress import serve
 
 import pipeline
+from ai_client import AiClient
 from config import BootstrapStore, is_bootstrap_complete
 from settings_store import SettingsStore
 from state_store import StateStore
@@ -50,6 +55,15 @@ log = logging.getLogger("main")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
 
 
+def _parse_hh_mm(value: str, fallback: str) -> tuple[int, int]:
+    try:
+        hh, mm = value.split(":")
+        return int(hh), int(mm)
+    except (ValueError, AttributeError):
+        hh, mm = fallback.split(":")
+        return int(hh), int(mm)
+
+
 def scheduler_loop(bootstrap_store: BootstrapStore, store: SettingsStore) -> None:
     state = StateStore(bootstrap_store.data_dir)
     log.info("Scheduler thread started")
@@ -63,18 +77,30 @@ def scheduler_loop(bootstrap_store: BootstrapStore, store: SettingsStore) -> Non
 
             settings = store.get_settings()
             tz = ZoneInfo(settings.get("timezone", "Europe/London"))
-            hh, mm = (int(x) for x in settings.get("run_at_local_time", "07:00").split(":"))
+            default_run_at = settings.get("run_at_local_time", "07:00")
             now = datetime.now(tz)
             today_str = now.strftime("%Y-%m-%d")
 
-            if now.hour == hh and now.minute == mm:
-                accounts = store.list_accounts()
-                due = [a for a in accounts if state.last_run_date(a["address"]) != today_str]
-                if due:
-                    log.info("Scheduled run starting for %d account(s)", len(due))
-                    pipeline.run_all(bootstrap, store)
-                    for a in due:
-                        state.mark_ran_today(a["address"], today_str)
+            # Each account fires at its own run time (an optional override on
+            # the account record) or the global default if it hasn't set
+            # one - so two accounts on different schedules are each checked
+            # and marked as run independently, rather than one shared
+            # HH:MM triggering every account at once.
+            for account in store.list_accounts():
+                hh, mm = _parse_hh_mm(account.get("run_at_local_time") or "", default_run_at)
+                if now.hour != hh or now.minute != mm:
+                    continue
+                if state.last_run_date(account["address"]) == today_str:
+                    continue
+                log.info("Scheduled run starting for %s (run time %02d:%02d)", account["address"], hh, mm)
+                ai = AiClient(bootstrap.gemini_api_key, bootstrap.gemini_model)
+                try:
+                    summary = pipeline.run_account(account, bootstrap, settings, ai)
+                except Exception:
+                    log.exception("Scheduled run failed for %s", account["address"])
+                    summary = {"ok": False, "error": "Run failed - see container logs."}
+                store.record_run_result(account["index"], summary)
+                state.mark_ran_today(account["address"], today_str)
         except Exception:
             # A bad settings value or a transient error must not kill the
             # scheduler thread permanently - log and keep ticking.

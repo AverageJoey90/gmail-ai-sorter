@@ -237,6 +237,13 @@ def create_app(bootstrap_store: BootstrapStore, store: SettingsStore) -> Flask:
                   <button type="submit" class="secondary">Save</button>
                 </div>
               </form>
+              <form method="post" action="{url_for('update_schedule', index=a['index'])}" class="field" style="margin-top:10px">
+                <label>Run time for this account (blank = use the default above, {_esc(settings['run_at_local_time'])})</label>
+                <div class="row">
+                  <input type="text" name="run_at_local_time" value="{_esc(a.get('run_at_local_time') or '')}" placeholder="{_esc(settings['run_at_local_time'])}">
+                  <button type="submit" class="secondary">Save</button>
+                </div>
+              </form>
             </div>""")
 
         accounts_html = "".join(account_cards) or '<div class="card muted">No Gmail accounts connected yet.</div>'
@@ -310,6 +317,21 @@ def create_app(bootstrap_store: BootstrapStore, store: SettingsStore) -> Flask:
         if recipient:
             store.update_account(index, digest_recipient=recipient)
         return redirect(url_for("dashboard", flash="Digest recipient updated."))
+
+    @app.post("/accounts/<int:index>/schedule")
+    def update_schedule(index: int):
+        run_at = request.form.get("run_at_local_time", "").strip()
+        if not run_at:
+            # Blank means "use the default run time" - clear any override.
+            store.update_account(index, run_at_local_time=None)
+            return redirect(url_for("dashboard", flash="This account now uses the default run time."))
+        try:
+            hh, mm = run_at.split(":")
+            int(hh), int(mm)
+        except ValueError:
+            return redirect(url_for("dashboard", flash="Run time must be HH:MM - not saved."))
+        store.update_account(index, run_at_local_time=run_at)
+        return redirect(url_for("dashboard", flash=f"Run time for this account set to {run_at}."))
 
     @app.post("/accounts/<int:index>/remove")
     def remove_account(index: int):

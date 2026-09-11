@@ -69,6 +69,7 @@ class SettingsStore:
                 "index": index,
                 "address": address,
                 "digest_recipient": address,
+                "run_at_local_time": None,  # None = use the global default run_at_local_time setting
                 "connected_at": datetime.now(timezone.utc).isoformat(),
                 "last_run": None,
             })
