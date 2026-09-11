@@ -268,6 +268,10 @@ def create_app(bootstrap_store: BootstrapStore, store: SettingsStore) -> Flask:
             <label for="ignore">Labels to never sort into (comma-separated)</label>
             <input type="text" id="ignore" name="ignore_labels" value="{_esc(', '.join(settings['ignore_labels']))}">
           </div>
+          <div class="field">
+            <label for="always_important">Labels that always show in "Good to know" (comma-separated)</label>
+            <input type="text" id="always_important" name="always_important_labels" value="{_esc(', '.join(settings['always_important_labels']))}">
+          </div>
           <button type="submit">Save settings</button>
         </form>
         </div>
@@ -289,11 +293,13 @@ def create_app(bootstrap_store: BootstrapStore, store: SettingsStore) -> Flask:
             threshold = 0.7
 
         ignore_labels = [s.strip() for s in request.form.get("ignore_labels", "").split(",") if s.strip()]
+        always_important_labels = [s.strip() for s in request.form.get("always_important_labels", "").split(",") if s.strip()]
 
         store.update_settings(
             run_at_local_time=run_at,
             classify_confidence_threshold=threshold,
             ignore_labels=ignore_labels,
+            always_important_labels=always_important_labels,
         )
         return redirect(url_for("dashboard", flash="Settings saved."))
 

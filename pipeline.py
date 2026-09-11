@@ -32,6 +32,12 @@ def run_account(account: dict, bootstrap: BootstrapConfig, settings: dict, ai: A
     ignore_labels = set(settings.get("ignore_labels", []))
     threshold = float(settings.get("classify_confidence_threshold", 0.7))
     tz = settings.get("timezone", "Europe/London")
+    # Anything classified into (or already filed under) one of these labels
+    # always makes it into the digest's "Good to know" section, regardless
+    # of the AI's top-5 importance ranking - e.g. school emails, so they're
+    # never at the mercy of the ranking call judging them less important
+    # than something else that happened that day.
+    always_important_labels = {s.strip().lower() for s in settings.get("always_important_labels", []) if s.strip()}
 
     label_map = gmail.list_user_labels(ignore=ignore_labels)
     label_names = list(label_map.keys())
@@ -40,6 +46,7 @@ def run_account(account: dict, bootstrap: BootstrapConfig, settings: dict, ai: A
     needs_reply_items: list[dict] = []
     sorted_items: list[dict] = []
     unmatched_items: list[dict] = []
+    priority_items: list[dict] = []  # always-important-label matches, force-merged into "Good to know" below
     all_reviewed: dict[str, dict] = {}  # ref -> {subject, sender, body}
 
     def maybe_flag_needs_reply(msg, ai_result: dict) -> None:
@@ -73,30 +80,55 @@ def run_account(account: dict, bootstrap: BootstrapConfig, settings: dict, ai: A
             log.exception("%s: failed to fetch inbox message %s, skipping", address, msg_id)
             continue
 
-        all_reviewed[f"inbox_{msg.id}"] = {"ref": f"inbox_{msg.id}", "subject": msg.subject, "sender": msg.sender, "body": msg.body_text}
+        all_reviewed[f"inbox_{msg.id}"] = {
+            "ref": f"inbox_{msg.id}", "subject": msg.subject, "sender": msg.sender,
+            "body": msg.body_text, "gmail_link": msg.permalink(),
+        }
 
         try:
             result = ai.classify_email(msg.subject, msg.sender, msg.body_text, label_names)
         except Exception:
             log.exception("%s: classification failed for %s, leaving in inbox", address, msg_id)
-            unmatched_items.append({"subject": msg.subject, "sender": msg.sender, "reason": "Classification failed - see container logs."})
+            unmatched_items.append({
+                "subject": msg.subject, "sender": msg.sender,
+                "reason": "Classification failed - see container logs.", "gmail_link": msg.permalink(),
+            })
             continue
+
+        if always_important_labels and result.get("label") and result["label"].strip().lower() in always_important_labels:
+            priority_items.append({
+                "subject": msg.subject,
+                "sender": msg.sender,
+                "summary": result.get("reasoning") or msg.snippet,
+                "gmail_link": msg.permalink(),
+                "is_event": False,
+            })
 
         if result["label"] and result["confidence"] >= threshold:
             try:
                 gmail.apply_label_and_archive(msg.id, label_map[result["label"]])
-                sorted_items.append({"subject": msg.subject, "sender": msg.sender, "label": result["label"]})
+                sorted_items.append({
+                    "subject": msg.subject, "sender": msg.sender,
+                    "label": result["label"], "gmail_link": msg.permalink(),
+                })
             except Exception:
                 log.exception("%s: failed to apply label to %s", address, msg_id)
-                unmatched_items.append({"subject": msg.subject, "sender": msg.sender, "reason": "Label apply failed - see container logs."})
+                unmatched_items.append({
+                    "subject": msg.subject, "sender": msg.sender,
+                    "reason": "Label apply failed - see container logs.", "gmail_link": msg.permalink(),
+                })
         else:
             reason = result.get("reasoning") or "No existing label was a confident match."
-            unmatched_items.append({"subject": msg.subject, "sender": msg.sender, "reason": reason})
+            unmatched_items.append({
+                "subject": msg.subject, "sender": msg.sender,
+                "reason": reason, "gmail_link": msg.permalink(),
+            })
 
         maybe_flag_needs_reply(msg, result)
 
     # ---- 2. Sweep other labelled folders for unread mail -----------------------------------------------------------
     folder_unread_ids: set[str] = set()
+    priority_folder_ids: set[str] = set()  # unread ids that live under an always-important label (e.g. "School")
     for name in label_names:
         try:
             ids = gmail.search_message_ids(f'label:"{name}" is:unread', max_results=100)
@@ -104,6 +136,8 @@ def run_account(account: dict, bootstrap: BootstrapConfig, settings: dict, ai: A
             log.exception("%s: failed searching label %s, skipping", address, name)
             continue
         folder_unread_ids.update(ids)
+        if always_important_labels and name.strip().lower() in always_important_labels:
+            priority_folder_ids.update(ids)
 
     log.info("%s: %d unread messages found across %d labelled folders", address, len(folder_unread_ids), len(label_names))
     for msg_id in folder_unread_ids:
@@ -114,7 +148,19 @@ def run_account(account: dict, bootstrap: BootstrapConfig, settings: dict, ai: A
             log.exception("%s: failed processing folder message %s, skipping", address, msg_id)
             continue
 
-        all_reviewed[f"folder_{msg.id}"] = {"ref": f"folder_{msg.id}", "subject": msg.subject, "sender": msg.sender, "body": msg.body_text}
+        all_reviewed[f"folder_{msg.id}"] = {
+            "ref": f"folder_{msg.id}", "subject": msg.subject, "sender": msg.sender,
+            "body": msg.body_text, "gmail_link": msg.permalink(),
+        }
+
+        if msg_id in priority_folder_ids:
+            priority_items.append({
+                "subject": msg.subject,
+                "sender": msg.sender,
+                "summary": msg.snippet,
+                "gmail_link": msg.permalink(),
+                "is_event": False,
+            })
 
         try:
             result = ai.classify_email(msg.subject, msg.sender, msg.body_text, label_names)
@@ -131,11 +177,26 @@ def run_account(account: dict, bootstrap: BootstrapConfig, settings: dict, ai: A
                 base = all_reviewed.get(r["ref"])
                 if not base:
                     continue
-                top_picks.append({**r, "subject": base["subject"], "sender": base["sender"]})
+                top_picks.append({**r, "subject": base["subject"], "sender": base["sender"], "gmail_link": base.get("gmail_link")})
         except Exception:
             log.exception("%s: importance ranking failed, omitting 'Good to know' section", address)
 
+    # Force-merge always-important-label matches (e.g. School) to the front
+    # of "Good to know", ahead of the AI's own picks - but don't duplicate
+    # one that the ranking already picked up with its own (better) summary.
+    if priority_items:
+        seen = {(p.get("subject"), p.get("sender")) for p in top_picks}
+        priority_only = []
+        for p in priority_items:
+            key = (p.get("subject"), p.get("sender"))
+            if key in seen:
+                continue
+            seen.add(key)
+            priority_only.append(p)
+        top_picks = priority_only + top_picks
+
     # ---- 4. Build + send digest -----------------------------------------------------------
+    now = datetime.now(ZoneInfo(tz))
     digest = DigestData(
         account_address=address,
         reviewed_count=len(all_reviewed),
@@ -147,9 +208,10 @@ def run_account(account: dict, bootstrap: BootstrapConfig, settings: dict, ai: A
         sorted_items=sorted_items,
         unmatched_items=unmatched_items,
         timezone=tz,
+        date_label=now.strftime("%-d %B %Y"),
     )
     html_body = build_digest_html(digest)
-    today = datetime.now(ZoneInfo(tz)).strftime("%Y-%m-%d")
+    today = now.strftime("%Y-%m-%d")
     subject = f"Gmail daily digest - {address} - {today}"
     recipient = account.get("digest_recipient") or address
     gmail.send_html_email(recipient, subject, html_body, address)

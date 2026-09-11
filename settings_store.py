@@ -19,6 +19,13 @@ DEFAULTS: dict[str, Any] = {
     "timezone": "Europe/London",
     "ignore_labels": [],
     "classify_confidence_threshold": 0.7,
+    # Any email classified (or already filed) under one of these labels
+    # always appears in the digest's "Good to know" section, regardless of
+    # what the AI's top-5 importance ranking decides - e.g. school emails
+    # you never want to risk missing. Case-insensitive match against the
+    # label name. Defaults to "School" since that's the common case, but
+    # editable from the dashboard without a redeploy.
+    "always_important_labels": ["School"],
 }
 
 

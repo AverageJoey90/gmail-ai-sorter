@@ -44,8 +44,13 @@ NAS, no `.env` file to hunt for.
 - **Per-account digest recipient**, editable any time.
 - **Run now** - trigger an immediate sort+digest for one account or all of
   them, without waiting for the schedule.
-- **Settings** - daily run time, label-match confidence threshold, and a
-  list of labels the AI should never sort into.
+- **Settings** - daily run time, label-match confidence threshold, a
+  list of labels the AI should never sort into, and a list of labels that
+  should always show up in the digest's "Good to know" section regardless
+  of what the AI's importance ranking decides (defaults to `School`, so
+  school emails never get missed just because the AI judged something else
+  more important that day - add more label names, comma-separated, for
+  anything else you never want to risk missing).
 - **Last run status** per account (counts, or an error if something went
   wrong).
 
@@ -440,8 +445,9 @@ with no terminal involved.
    connected. Repeat for the second account (sign out of Google or use an
    incognito window so the picker offers the other account).
 3. Adjust **Settings** if you want (run time, confidence threshold,
-   ignore list), and set each account's digest recipient if you want the
-   digest to land somewhere other than the account's own inbox.
+   ignore list, always-important labels), and set each account's digest
+   recipient if you want the digest to land somewhere other than the
+   account's own inbox.
 4. Click **Run now** on an account rather than waiting for the schedule,
    then refresh in a minute or two. Check: did the digest email arrive?
    Did a couple of inbox emails get labelled and archived? Does a "Needs
