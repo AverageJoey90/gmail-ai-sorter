@@ -100,7 +100,18 @@ class TailscaleManager:
             self._daemon = subprocess.Popen(
                 [
                     "tailscaled",
-                    f"--state={STATE_DIR}/tailscaled.state",
+                    # --statedir (a directory) rather than --state (a single
+                    # file): this is what tailscaled uses as its "var root"
+                    # for storing Funnel/Serve's HTTPS certificates, not just
+                    # the connection state - passing only --state left var
+                    # root defaulting to /var/lib/tailscale (which doesn't
+                    # exist in this image and isn't on the persistent /data
+                    # volume anyway), causing "cert refresh: ... no
+                    # TailscaleVarRoot" and a Funnel URL that never actually
+                    # serves HTTPS. --statedir keeps everything - node
+                    # identity and certificates alike - under /data, so both
+                    # survive container restarts/redeploys.
+                    f"--statedir={STATE_DIR}",
                     f"--socket={SOCKET_PATH}",
                     "--tun=userspace-networking",
                 ]
