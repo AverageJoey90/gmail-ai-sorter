@@ -1,0 +1,115 @@
+# Portainer Stack YAML for the Asustor AS1102T (ARM64/aarch64).
+#
+# IMPORTANT: deploy this using Portainer's "Repository" build method (a
+# git repo URL), NOT "Web editor"/"Upload". Those two only ever see this
+# one YAML file - they never receive the sibling Dockerfile/*.py files,
+# so `build:` below fails with "open Dockerfile: no such file or
+# directory" no matter how you paste/upload it. "Repository" clones the
+# WHOLE folder (Dockerfile, requirements.txt, all the .py files, this
+# file) onto the NAS itself and builds from that clone - entirely from
+# the Stacks UI, no SSH or manual `docker build` needed. See README
+# section 4 for the GitHub-upload + Portainer "Repository" walkthrough.
+#
+# All the .py files sit flat at the repo root (no subfolder) on purpose -
+# GitHub's web upload doesn't reliably preserve subfolder structure when
+# you drag files in, which previously broke a `COPY app ./app` step.
+#
+# In Portainer: Stacks > Add stack > Build method: Repository > paste your
+# repo URL, Compose path: docker-compose.yml > Deploy. Since the build
+# happens on the NAS itself (ARM64), the correct architecture is picked up
+# automatically.
+#
+# The 5 variables below (GEMINI_API_KEY, GOOGLE_CLIENT_ID,
+# GOOGLE_CLIENT_SECRET, PUBLIC_BASE_URL, DASHBOARD_PASSWORD) are entirely
+# OPTIONAL at deploy time - the ${VAR:-} defaults mean the stack deploys
+# fine with none of them set. Leave "Environment variables" empty and hit
+# Deploy right away if you'd rather; the dashboard will boot and show a
+# one-time Setup page at http://<nas-lan-ip>:4568/ where you type them in
+# through the browser instead. If you'd prefer to set them here up front,
+# switch "Environment variables" to Advanced mode and paste lines from
+# .env.example with real values - either way works and both take effect
+# immediately with no redeploy needed if changed later from the Setup page.
+#
+# Nothing else needs doing on the NAS after that: which Gmail accounts are
+# connected, the daily schedule, confidence threshold, and ignore list are
+# all set from the dashboard at https://<PUBLIC_BASE_URL>/ (or
+# http://<nas-lan-ip>:4568/ once you're on the home network) - see README.
+#
+# HTTPS - three routes, see README "Expose the NAS over HTTPS" section:
+#
+# Route A (Cloudflare Tunnel, needs a domain you own): CLOUDFLARE_TUNNEL_TOKEN
+# is entirely optional and works exactly like the 5 above - set it here, or
+# paste it into the dashboard's own Setup page (/setup, reachable anytime)
+# instead. Either way, the app runs `cloudflared` itself as a supervised
+# background process (see tunnel_manager.py) the moment a token is present.
+#
+# Route B (Asustor's own EZ-Connect/Certificate Manager/Reverse Proxy): no
+# extra env vars here - it's all configured on the NAS itself.
+#
+# Route C (Tailscale Funnel, recommended £0 option - no domain, no router
+# changes): TAILSCALE_AUTH_KEY is also entirely optional, set here or via
+# the Setup page like the token above. TAILSCALE_HOSTNAME is optional too
+# (defaults to "gmail-ai-sorter") and becomes part of the public URL. The
+# app runs `tailscaled`/`tailscale` itself as supervised background
+# processes (see tailscale_manager.py) the moment an auth key is present -
+# this is the one route that needs the `cap_add`/`devices` lines below,
+# since Tailscale Funnel needs real kernel networking to work reliably.
+#
+# Whichever route(s) you leave blank, nothing extra runs - see README
+# section 6 "Known caveats".
+services:
+  gmail-ai-sorter:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: gmail-ai-sorter:latest
+    container_name: gmail-ai-sorter
+    restart: unless-stopped
+    # Only actually needed for Route C (Tailscale Funnel) - see the comment
+    # block above and tailscale_manager.py. Harmless to leave in place even
+    # if you're using Route A or B instead.
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    environment:
+      # All optional - see the comment block above. Blank is fine; fill
+      # these in later from the dashboard's Setup page instead.
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.5-flash}
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}
+      - PUBLIC_BASE_URL=${PUBLIC_BASE_URL:-}
+      - DASHBOARD_PASSWORD=${DASHBOARD_PASSWORD:-}
+      - CLOUDFLARE_TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN:-}
+      - TAILSCALE_AUTH_KEY=${TAILSCALE_AUTH_KEY:-}
+      - TAILSCALE_HOSTNAME=${TAILSCALE_HOSTNAME:-gmail-ai-sorter}
+      - TZ=${TZ:-Europe/London}
+      - PORT=4568
+    ports:
+      # Reachable directly on the home LAN at http://<nas-ip>:4568/ too -
+      # useful day-to-day so you're not always going through the public
+      # URL. The initial "Connect Gmail account" step still needs to
+      # happen via PUBLIC_BASE_URL (see README) because that's the only
+      # address Google's OAuth redirect is registered to.
+      - "4568:4568"
+    volumes:
+      # Holds each connected account's token.json, settings.json (schedule,
+      # confidence threshold, ignore list, digest recipients - everything
+      # set from the dashboard), the Flask session signing key, and (if
+      # using Route C) Tailscale's own node state - which is what makes
+      # its https://...ts.net address stable across restarts instead of
+      # generating a new device/URL every time. Survives stack
+      # updates/recreation - do NOT delete this volume without
+      # reconnecting every Gmail account (and re-authenticating Tailscale,
+      # if used) again afterwards.
+      - gmail-ai-sorter-data:/data
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  gmail-ai-sorter-data:
