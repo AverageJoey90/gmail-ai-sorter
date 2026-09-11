@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 from pathlib import Path
 
 from google_auth_oauthlib.flow import Flow
@@ -34,40 +35,59 @@ def _client_config(cfg: BootstrapConfig) -> dict:
     }
 
 
-def build_flow(cfg: BootstrapConfig, state: str | None = None) -> Flow:
+def build_flow(cfg: BootstrapConfig, state: str | None = None, code_verifier: str | None = None) -> Flow:
+    # code_verifier is passed in explicitly (never left to the library's
+    # own autogenerate-on-authorization_url behavior) because start_ and
+    # finish_authorization() below run in two separate HTTP requests, each
+    # building its own throwaway Flow object - an auto-generated verifier
+    # would live only on the first request's Flow instance and be gone by
+    # the time the second one needs it, which is exactly what caused
+    # Google to reject the token exchange with "invalid_grant: Missing
+    # code verifier". Passing one in here (and setting
+    # autogenerate_code_verifier=False) means both requests use the same
+    # value, as long as the caller persists it (see web_app.py, which
+    # stashes it in the signed Flask session next to `state`).
     return Flow.from_client_config(
         _client_config(cfg),
         scopes=DEFAULT_SCOPES,
         state=state,
         redirect_uri=cfg.public_base_url + REDIRECT_PATH,
+        code_verifier=code_verifier,
+        autogenerate_code_verifier=code_verifier is None,
     )
 
 
-def start_authorization(cfg: BootstrapConfig) -> tuple[str, str]:
-    """Returns (authorization_url, state) - the caller (web_app.py) stashes
-    `state` in the signed Flask session and redirects the browser to
-    authorization_url."""
-    flow = build_flow(cfg)
+def start_authorization(cfg: BootstrapConfig) -> tuple[str, str, str]:
+    """Returns (authorization_url, state, code_verifier) - the caller
+    (web_app.py) stashes both `state` and `code_verifier` in the signed
+    Flask session and redirects the browser to authorization_url. Both
+    values must be handed back to finish_authorization() unchanged."""
+    code_verifier = secrets.token_urlsafe(64)  # RFC 7636: 43-128 chars, unreserved charset
+    flow = build_flow(cfg, code_verifier=code_verifier)
     auth_url, state = flow.authorization_url(
         access_type="offline",       # required to get a refresh token
         prompt="consent",             # force re-consent so a refresh token
                                        # is issued even on a repeat connect
         include_granted_scopes="true",
     )
-    return auth_url, state
+    return auth_url, state, code_verifier
 
 
 def token_path_for(cfg: BootstrapConfig, index: int) -> str:
     return str(Path(cfg.data_dir) / f"account{index}" / "token.json")
 
 
-def finish_authorization(cfg: BootstrapConfig, full_callback_url: str, state: str, index: int) -> str:
+def finish_authorization(
+    cfg: BootstrapConfig, full_callback_url: str, state: str, code_verifier: str, index: int
+) -> str:
     """Exchanges the authorization code for tokens, writes token.json for
     the given account index, and returns the connected Gmail address.
     `state` must be the value handed back by start_authorization and
     stashed in the caller's signed session, so this can't be tricked into
-    completing a flow it didn't start (CSRF protection)."""
-    flow = build_flow(cfg, state=state)
+    completing a flow it didn't start (CSRF protection). `code_verifier`
+    must be the matching value from that same start_authorization call -
+    see build_flow()'s comment for why."""
+    flow = build_flow(cfg, state=state, code_verifier=code_verifier)
     flow.fetch_token(authorization_response=full_callback_url)
     creds = flow.credentials
 

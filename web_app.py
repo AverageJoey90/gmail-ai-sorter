@@ -344,13 +344,15 @@ def create_app(bootstrap_store: BootstrapStore, store: SettingsStore) -> Flask:
     # ---- OAuth connect flow -----------------------------------------------------------
     @app.get("/oauth/start")
     def oauth_start():
-        auth_url, state = oauth_web.start_authorization(g.bootstrap)
+        auth_url, state, code_verifier = oauth_web.start_authorization(g.bootstrap)
         session["oauth_state"] = state
+        session["oauth_code_verifier"] = code_verifier
         return redirect(auth_url)
 
     @app.get("/oauth/callback")
     def oauth_callback():
         expected_state = session.pop("oauth_state", None)
+        expected_code_verifier = session.pop("oauth_code_verifier", None)
         got_state = request.args.get("state")
         if not expected_state or expected_state != got_state:
             return redirect(url_for("dashboard", flash="Google sign-in failed (state mismatch) - please try connecting again."))
@@ -367,7 +369,9 @@ def create_app(bootstrap_store: BootstrapStore, store: SettingsStore) -> Flask:
 
         index = store.add_account("(connecting...)")
         try:
-            address = oauth_web.finish_authorization(g.bootstrap, callback_url, expected_state, index)
+            address = oauth_web.finish_authorization(
+                g.bootstrap, callback_url, expected_state, expected_code_verifier, index
+            )
         except Exception:
             log.exception("OAuth callback failed")
             store.remove_account(index)
