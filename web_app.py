@@ -343,6 +343,17 @@ def create_app(bootstrap_store: BootstrapStore, store: SettingsStore) -> Flask:
                    value="{settings['school_lookback_days']}">
             <div class="muted">How far back the School section checks for upcoming events/reminders - independent of each account's own run frequency (e.g. 21 for three weeks). Doesn't change what gets sorted or how often the digest runs.</div>
           </div>
+          <div class="field">
+            <label style="display:flex;align-items:center;gap:8px;font-weight:normal">
+              <input type="checkbox" name="move_old_digests_to_weekly_folder" value="1"
+                     {"checked" if settings.get("move_old_digests_to_weekly_folder") else ""} style="width:auto">
+              Move old digest emails into a "{_esc(pipeline.WEEKLY_DIGEST_LABEL_NAME)}" label
+            </label>
+            <div class="muted">Applies to every connected account. Before each run, any of that account's own
+              previous digest emails still sitting in its inbox get labelled "{_esc(pipeline.WEEKLY_DIGEST_LABEL_NAME)}"
+              (created automatically if it doesn't exist yet) and archived out of the inbox - so digests don't pile
+              up or get accidentally re-sorted as if they were new mail. Past digests are kept there, not deleted.</div>
+          </div>
           <button type="submit">Save settings</button>
         </form>
         </div>
@@ -386,11 +397,17 @@ def create_app(bootstrap_store: BootstrapStore, store: SettingsStore) -> Flask:
         except ValueError:
             return redirect(url_for("dashboard", flash="School section lookback must be a whole number of days (1 or more) - not saved."))
 
+        # A checkbox only appears in form data at all when it's ticked, so
+        # its presence/absence (not its value) is the signal - same pattern
+        # as the per-account "hold unread emails" checkbox (round 20).
+        move_old_digests = "move_old_digests_to_weekly_folder" in request.form
+
         store.update_settings(
             classify_confidence_threshold=threshold,
             ignore_labels=ignore_labels,
             school_section_labels=school_section_labels,
             school_lookback_days=school_lookback_days,
+            move_old_digests_to_weekly_folder=move_old_digests,
         )
         return redirect(url_for("dashboard", flash="Settings saved."))
 
@@ -488,14 +505,26 @@ def create_app(bootstrap_store: BootstrapStore, store: SettingsStore) -> Flask:
         data = ics_store.read_event(token)
         if data is None:
             return ("This calendar link has expired or wasn't found.", 404)
+        # Round 21 (Joe: still got a "subscribe" prompt instead of a one-off
+        # "Add Event"): a calendar app decides how to treat this resource
+        # from BOTH the .ics body's own METHOD property (ics_builder.py -
+        # REQUEST for a real invitation, its fallback PUBLISH otherwise) AND
+        # this same method echoed as a `method=` parameter on the HTTP
+        # Content-Type header itself - several mail/calendar clients only
+        # honour whichever one they check first, so both need to agree.
+        # Parsed straight out of the actual bytes rather than hardcoded, so
+        # this can never disagree with what ics_builder.py actually wrote.
+        method = "PUBLISH"
+        for line in data.split(b"\r\n"):
+            if line.startswith(b"METHOD:"):
+                method = line[len(b"METHOD:"):].decode("ascii", errors="replace").strip() or method
+                break
+        response = Response(data, mimetype="text/calendar")
+        response.headers["Content-Type"] = f"text/calendar; charset=utf-8; method={method}"
         # Content-Disposition: attachment - without this, some browsers
         # (notably mobile Safari) render an .ics resource fetched inline as
         # if it were a live calendar feed to "Subscribe" to, rather than
-        # downloading it as a one-off file to import. Combined with the
-        # METHOD:PUBLISH property in the .ics content itself (ics_builder.py),
-        # this is what makes tapping the link produce a native one-time
-        # "Add Event"/"Add to Calendar" prompt instead of a subscribe prompt.
-        response = Response(data, mimetype="text/calendar")
+        # downloading it as a one-off file to import.
         response.headers["Content-Disposition"] = 'attachment; filename="event.ics"'
         return response
 

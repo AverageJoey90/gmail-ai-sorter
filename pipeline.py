@@ -27,6 +27,19 @@ log = logging.getLogger(__name__)
 # step itself is skipped while it's within its grace period.
 HOLD_UNREAD_GRACE_DAYS = 7
 
+# Joe: "if you find an old Daily or Weekly digest then move that into the
+# Weekly Digest folder/label to be replaced by the newest one" - a global
+# (not per-account) opt-in that tidies up this app's own past digest emails
+# instead of leaving them to pile up in the inbox (or get accidentally
+# swept up and re-sorted by this run's own inbox-sort step, if the digest
+# is sent back to the same account it came from). Every past digest that's
+# found gets archived under this one label - none are ever removed, so it
+# builds a running history rather than trying to keep just the latest.
+WEEKLY_DIGEST_LABEL_NAME = "Weekly Digest"
+# Shared between building the real subject line (below) and searching for
+# past ones (_archive_old_digests), so the two can never drift apart.
+DIGEST_SUBJECT_PREFIX_TEMPLATE = "Gmail daily digest - {address} - "
+
 
 def _message_age_days(internal_date_ms: int, now: datetime | None = None) -> float:
     """How many days old a message is, based on Gmail's internalDate (epoch
@@ -42,15 +55,19 @@ def _message_age_days(internal_date_ms: int, now: datetime | None = None) -> flo
     return (now - received).total_seconds() / 86400.0
 
 
-def _build_calendar_link(item: dict, ics_store: IcsStore, public_base_url: str) -> str | None:
+def _build_calendar_link(
+    item: dict, ics_store: IcsStore, public_base_url: str, organizer_email: str, attendee_email: str,
+) -> str | None:
     """If `item` (an AI-ranked "Good to know"/School entry) describes a
-    dated event, builds its .ics file, saves it via `ics_store`, and
-    returns a link to the dashboard's `/ics/<token>.ics` route that serves
-    it - tapping that link is what triggers a native "Add to Calendar"
-    prompt on the device (iPhone included), since it's a real .ics file
-    with a text/calendar content type rather than a Google-Calendar-only
-    web link. Returns None (no calendar link shown) if there's no event,
-    or its start time couldn't be parsed."""
+    dated event, builds its .ics file (as a real invitation - see
+    ics_builder.py - organized by this Gmail account, addressed to whoever
+    the digest itself was sent to), saves it via `ics_store`, and returns a
+    link to the dashboard's `/ics/<token>.ics` route that serves it -
+    tapping that link is what triggers a native "Add to Calendar" prompt on
+    the device (iPhone included), since it's a real .ics file with a
+    text/calendar content type rather than a Google-Calendar-only web link.
+    Returns None (no calendar link shown) if there's no event, or its start
+    time couldn't be parsed."""
     if not item.get("is_event") or not item.get("event_start"):
         return None
     ics_bytes = build_ics(
@@ -59,11 +76,44 @@ def _build_calendar_link(item: dict, ics_store: IcsStore, public_base_url: str) 
         end_iso=item.get("event_end", ""),
         location=item.get("event_location", ""),
         description=item.get("summary", ""),
+        organizer_email=organizer_email,
+        attendee_email=attendee_email,
     )
     if not ics_bytes:
         return None
     token = ics_store.save_event(ics_bytes)
     return f"{public_base_url.rstrip('/')}/ics/{token}.ics"
+
+
+def _archive_old_digests(gmail: GmailClient, address: str) -> int:
+    """Moves any of THIS account's own previously-sent digest emails that
+    are still sitting in its inbox into the "Weekly Digest" label (created
+    if it doesn't already exist), so they don't clutter the inbox and -
+    just as importantly - aren't accidentally picked up and re-processed by
+    this same run's own inbox-sort step as if they were new mail (relevant
+    whenever the digest is sent back to the same account it came from).
+    Anything already archived/labelled from a previous run is left alone
+    (this only ever looks at what's currently in the inbox). Returns how
+    many were moved, for logging only."""
+    try:
+        label_id = gmail.get_or_create_label(WEEKLY_DIGEST_LABEL_NAME)
+    except Exception:
+        log.exception("%s: failed to get/create the '%s' label, skipping digest cleanup this run", address, WEEKLY_DIGEST_LABEL_NAME)
+        return 0
+    prefix = DIGEST_SUBJECT_PREFIX_TEMPLATE.format(address=address)
+    try:
+        ids = gmail.search_message_ids(f'in:inbox subject:"{prefix}"', max_results=50)
+    except Exception:
+        log.exception("%s: failed searching for old digest emails, skipping cleanup this run", address)
+        return 0
+    moved = 0
+    for msg_id in ids:
+        try:
+            gmail.apply_label_and_archive(msg_id, label_id)
+            moved += 1
+        except Exception:
+            log.exception("%s: failed to move old digest message %s into '%s'", address, msg_id, WEEKLY_DIGEST_LABEL_NAME)
+    return moved
 
 
 def run_account(account: dict, bootstrap: BootstrapConfig, settings: dict, ai: AiClient) -> dict:
@@ -72,11 +122,23 @@ def run_account(account: dict, bootstrap: BootstrapConfig, settings: dict, ai: A
     for SettingsStore.record_run_result and for display in the dashboard."""
     address = account["address"]
     index = account["index"]
+    recipient = account.get("digest_recipient") or address
     log.info("Starting run for %s", address)
 
     token_file = token_path_for(bootstrap, index)
     gmail = GmailClient(token_file)
     ics_store = IcsStore(bootstrap.data_dir)
+
+    # Joe's "move old digests into a Weekly Digest folder" setting - global,
+    # so it's read straight off `settings` rather than the account record.
+    # Deliberately done before anything else in this run (before even the
+    # inbox sort below): if this digest gets sent back to this same
+    # account, last run's copy would otherwise still be sitting unlabelled
+    # in the inbox right now and get swept up as if it were brand-new mail.
+    if bool(settings.get("move_old_digests_to_weekly_folder")):
+        moved = _archive_old_digests(gmail, address)
+        if moved:
+            log.info("%s: moved %d old digest email(s) into '%s'", address, moved, WEEKLY_DIGEST_LABEL_NAME)
 
     ignore_labels = set(settings.get("ignore_labels", []))
     threshold = float(settings.get("classify_confidence_threshold", 0.7))
@@ -297,7 +359,7 @@ def run_account(account: dict, bootstrap: BootstrapConfig, settings: dict, ai: A
                 if not base:
                     continue
                 item = {**r, "subject": base["subject"], "sender": base["sender"], "gmail_link": base.get("gmail_link")}
-                item["calendar_link"] = _build_calendar_link(item, ics_store, bootstrap.public_base_url)
+                item["calendar_link"] = _build_calendar_link(item, ics_store, bootstrap.public_base_url, address, recipient)
                 top_picks.append(item)
         except Exception:
             log.exception("%s: importance ranking failed, omitting 'Good to know' section", address)
@@ -360,7 +422,7 @@ def run_account(account: dict, bootstrap: BootstrapConfig, settings: dict, ai: A
                     if not base:
                         continue
                     item = {**r, "subject": base["subject"], "sender": base["sender"], "gmail_link": base.get("gmail_link")}
-                    item["calendar_link"] = _build_calendar_link(item, ics_store, bootstrap.public_base_url)
+                    item["calendar_link"] = _build_calendar_link(item, ics_store, bootstrap.public_base_url, address, recipient)
                     school_items.append(item)
             except Exception:
                 log.exception("%s: School ranking failed, falling back to the most recent School emails", address)
@@ -389,8 +451,7 @@ def run_account(account: dict, bootstrap: BootstrapConfig, settings: dict, ai: A
     )
     html_body = build_digest_html(digest)
     today = now.strftime("%Y-%m-%d")
-    subject = f"Gmail daily digest - {address} - {today}"
-    recipient = account.get("digest_recipient") or address
+    subject = DIGEST_SUBJECT_PREFIX_TEMPLATE.format(address=address) + today
     gmail.send_html_email(recipient, subject, html_body, address)
     log.info("%s: digest sent to %s", address, recipient)
 

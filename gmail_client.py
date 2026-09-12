@@ -122,6 +122,23 @@ class GmailClient:
         return data["emailAddress"]
 
     # ---- labels -----------------------------------------------------------
+    def get_or_create_label(self, name: str) -> str:
+        """Returns the id of the label `name`, creating it (visible, shown in
+        the label list) if this account doesn't already have one by that
+        exact name. Used for the "move old digests into a folder" setting so
+        the "Weekly Digest" label always exists rather than requiring the
+        user to create it by hand first."""
+        data = self._get("/labels")
+        for lbl in data.get("labels", []):
+            if lbl["name"] == name:
+                return lbl["id"]
+        created = self._post("/labels", {
+            "name": name,
+            "labelListVisibility": "labelShow",
+            "messageListVisibility": "show",
+        })
+        return created["id"]
+
     def list_user_labels(self, ignore: set[str] | None = None) -> dict[str, str]:
         """Returns {label_name: label_id} for labels the AI may sort into -
         i.e. every label already in the account, minus system labels and

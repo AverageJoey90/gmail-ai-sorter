@@ -108,10 +108,19 @@ anything else) - anyone who has that exact link can see that one event's
 title/time/location, which is the same practical exposure as the old
 Google Calendar link already had (it put those same details directly in
 a public URL). Event files are kept for 90 days and cleaned up
-automatically after that. The .ics file itself is marked `METHOD:PUBLISH`
-and served with a `Content-Disposition: attachment` header, specifically so
-tapping the link produces a one-off "Add Event" prompt rather than an
-ongoing calendar "Subscribe" prompt.
+automatically after that.
+
+Only a genuine scheduled occurrence you'd actually attend - a meeting,
+appointment, reservation, class, or similar - gets flagged as an event in
+the first place; a payment deadline, delivery date, or other date mention
+with nothing to attend is deliberately left out, even though it has a date
+attached. When it is a real event, the .ics file is built as an actual
+one-off *invitation* - `METHOD:REQUEST` with a real organizer (the Gmail
+account) and attendee (whoever the digest was sent to) - rather than a bare
+announcement, and served with both a matching `method=` parameter on the
+Content-Type header and a `Content-Disposition: attachment` header. That
+combination is specifically what makes tapping the link produce a one-off
+"Add Event" prompt rather than an ongoing calendar "Subscribe" prompt.
 
 ## The dashboard (port 4568)
 
@@ -139,7 +148,16 @@ ongoing calendar "Subscribe" prompt.
   the general "Good to know" ranking), and how many days back the School
   section itself checks (default 14 -
   set it to whatever window makes sense as a reminder, e.g. 21 for three
-  weeks, independent of each account's own run frequency above).
+  weeks, independent of each account's own run frequency above), and a
+  checkbox - "Move old digest emails into a 'Weekly Digest' label" - that
+  applies to every connected account (off by default). When on, before each
+  run any of that account's own previous digest emails still sitting in its
+  inbox get labelled "Weekly Digest" (created automatically the first time
+  it's needed) and archived out of the inbox, so digests don't pile up or
+  get accidentally re-sorted as if they were new mail - especially relevant
+  if a digest is sent back to the same account it came from. Past digests
+  are kept under that label, not deleted - it's a running history, not just
+  the single latest one.
 - **Last run status** per account (counts, or an error if something went
   wrong).
 

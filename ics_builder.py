@@ -17,6 +17,18 @@ native "Add to Calendar" prompt on iOS (and works the same way, via
 whatever calendar app is registered, on Android/desktop). `build_ics()`
 below is the only function still used for that; the old Google Calendar
 link builder has been removed now that nothing calls it.
+
+Round 21 (Joe: tapping the link was still prompting to "subscribe" rather
+than add a one-off event, and asked to "ensure event logic is sturdy and is
+actually an event inviting attendance or participation") rebuilt the event
+as a genuine one-off *invitation* rather than a passive announcement:
+METHOD:REQUEST (not PUBLISH) plus a real ORGANIZER/ATTENDEE pair - the
+combination iTIP (RFC 5546) actually defines for "here is one specific
+occurrence, please add/respond to it", which is unambiguous in a way a bare
+METHOD-less or PUBLISH-only file apparently still wasn't for every calendar
+app that was tried. The organizer is the Gmail account doing the sorting
+(effectively "your assistant invited you"); the attendee is whoever the
+digest itself was actually sent to - see pipeline.py's call site.
 """
 from __future__ import annotations
 
@@ -28,9 +40,22 @@ def _fmt(dt: datetime) -> str:
     return dt.strftime("%Y%m%dT%H%M%S")
 
 
-def build_ics(title: str, start_iso: str, end_iso: str = "", location: str = "", description: str = "") -> bytes | None:
-    """Returns raw .ics bytes, or None if start_iso couldn't be parsed
-    (caller should just omit the Add to Calendar link in that case)."""
+def build_ics(
+    title: str,
+    start_iso: str,
+    end_iso: str = "",
+    location: str = "",
+    description: str = "",
+    organizer_email: str = "",
+    attendee_email: str = "",
+) -> bytes | None:
+    """Returns raw .ics bytes for a one-off event *invitation*, or None if
+    start_iso couldn't be parsed (caller should just omit the Add to
+    Calendar link in that case). `organizer_email`/`attendee_email`, when
+    given, add real ORGANIZER/ATTENDEE properties and switch the calendar's
+    METHOD to REQUEST - see the module docstring for why that's what
+    actually makes this read as "one event to add", not a calendar to
+    subscribe to."""
     try:
         start = datetime.fromisoformat(start_iso)
     except (ValueError, TypeError):
@@ -46,6 +71,15 @@ def build_ics(title: str, start_iso: str, end_iso: str = "", location: str = "",
 
     uid = f"{uuid.uuid4()}@gmail-ai-sorter"
     now = _fmt(datetime.utcnow()) + "Z"
+    # REQUEST is the iTIP method for "here's one occurrence, please add it
+    # (and you could reply)" - it's what makes an .ics genuinely read as an
+    # invitation to attend rather than an ambiguous calendar resource, which
+    # is what a calendar app can otherwise interpret as an ongoing feed to
+    # subscribe to instead of a single event to import. PUBLISH (a plain
+    # announcement, no organizer/attendee, no expected reply) is kept as a
+    # fallback for any caller that doesn't have real participant addresses
+    # to hand - there's no true attendee to invite without at least one.
+    method = "REQUEST" if (organizer_email and attendee_email) else "PUBLISH"
 
     def esc(s: str) -> str:
         return s.replace("\\", "\\\\").replace(",", "\\,").replace(";", "\\;").replace("\n", "\\n")
@@ -55,21 +89,29 @@ def build_ics(title: str, start_iso: str, end_iso: str = "", location: str = "",
         "VERSION:2.0",
         "PRODID:-//gmail-ai-sorter//EN",
         "CALSCALE:GREGORIAN",
-        # Without an explicit METHOD, some calendar apps (notably iOS) treat
-        # a bare .ics resource as ambiguous and offer to "Subscribe" to it as
-        # a live, ongoing feed rather than import it as a one-off event.
-        # METHOD:PUBLISH is the RFC 5545 way of saying "this is a single
-        # snapshot of an event, add it" - it's what actually produces the
-        # native one-time "Add to Calendar"/"Add Event" sheet instead of a
-        # subscription prompt.
-        "METHOD:PUBLISH",
+        f"METHOD:{method}",
         "BEGIN:VEVENT",
         f"UID:{uid}",
         f"DTSTAMP:{now}",
         f"DTSTART:{_fmt(start)}",
         f"DTEND:{_fmt(end)}",
         f"SUMMARY:{esc(title)}",
+        # STATUS/SEQUENCE/TRANSP make this look like a real, confirmed,
+        # busy-time event rather than a bare date marker - part of Joe's
+        # "sturdy event logic" ask. SEQUENCE:0 is also required by iTIP for
+        # a first-time REQUEST (a later update to the same UID would bump
+        # it, though this app never re-sends the same event).
+        "STATUS:CONFIRMED",
+        "SEQUENCE:0",
+        "TRANSP:OPAQUE",
     ]
+    if organizer_email:
+        lines.append(f"ORGANIZER;CN=Gmail AI Sorter:mailto:{organizer_email}")
+    if attendee_email:
+        lines.append(
+            f"ATTENDEE;CN={esc(attendee_email)};ROLE=REQ-PARTICIPANT;"
+            f"PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:{attendee_email}"
+        )
     if location:
         lines.append(f"LOCATION:{esc(location)}")
     if description:

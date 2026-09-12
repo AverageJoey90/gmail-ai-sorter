@@ -242,13 +242,19 @@ Body: {body[:4000]}
 notifications/marketing/automated mail unless genuinely important) and
 for each write a 1-2 sentence summary.
 
-If an email describes a specific dated event, meeting, appointment,
-reservation, or deadline, set is_event true and fill in event_title,
-event_start_iso8601 (and event_end_iso8601 if stated/inferable - default
-to 1 hour after start if only a start time is given), and
-event_location if mentioned. Use the {tz} timezone if no timezone is
-stated in the email. Otherwise leave is_event false and omit the event_*
-fields.
+Only set is_event true for a genuine scheduled occurrence the reader would
+actually attend, turn up to, or participate in at a specific date/time -
+a meeting, appointment, reservation, class, performance, party, or similar.
+It must invite actual attendance, not just mention a date. A payment or
+task DEADLINE, a delivery/dispatch date, a subscription renewal, or a
+vague mention of "next week" with nothing to attend is NOT an event, even
+though it has a date attached - leave is_event false for those (still
+summarize them normally). When it genuinely is an event, fill in
+event_title, event_start_iso8601 (and event_end_iso8601 if
+stated/inferable - default to 1 hour after start if only a start time is
+given), and event_location if mentioned. Use the {tz} timezone if no
+timezone is stated in the email. Otherwise leave is_event false and omit
+the event_* fields.
 
 Return picks ordered most important first, referencing each by its [ref] id.
 

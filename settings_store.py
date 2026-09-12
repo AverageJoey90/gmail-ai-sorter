@@ -32,6 +32,13 @@ DEFAULTS: dict[str, Any] = {
     # e.g. 21 for three weeks of lookback without changing how often the
     # digest itself runs.
     "school_lookback_days": 14,
+    # Joe: "if you find an old Daily or Weekly digest then move that into
+    # the Weekly Digest folder/label to be replaced by the newest one...
+    # have this as a global setting". Off by default; applies to every
+    # connected account when on (see pipeline._archive_old_digests) -
+    # unlike run time/frequency/weekday (round 18), this one Joe explicitly
+    # asked to keep global rather than per-account.
+    "move_old_digests_to_weekly_folder": False,
 }
 
 # Round 18: Joe asked for the run time / frequency / weekday to be purely
