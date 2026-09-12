@@ -95,13 +95,16 @@ automatically after that.
 
 - **Connect / disconnect Gmail accounts** - click a button, sign in to
   Google, done. No manual token files.
-- **Per-account digest recipient**, editable any time.
 - **Run now** - trigger an immediate sort+digest for one account or all of
   them, without waiting for the schedule.
-- **Per-account run time, frequency, and weekly day** - each Gmail
-  account's own card has its run time, daily/weekly frequency, and (only
-  shown once you pick Weekly) which day of the week it fires on. No global
-  schedule to keep in sync - just set each account the way you want it.
+- **Per-account settings, one Save button** - each Gmail account's own
+  card has its digest recipient, run time, daily/weekly frequency, and
+  (only shown once you pick Weekly) which day of the week it fires on, all
+  in one form with a single Save button at the bottom. No global schedule
+  to keep in sync - just set each account the way you want it. The button
+  reads "Saved" in green until you change something on that card, then
+  turns orange as a reminder there are unsaved changes - press it again to
+  save and it goes back to green.
 - **Settings** - label-match confidence threshold, a list of
   labels the AI should never sort into, a list of keywords that route a
   label to its own

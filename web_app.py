@@ -50,6 +50,9 @@ button.danger,.btn.danger{background:#c0362c}
 .flash{background:#fff3cd;border:1px solid #ffe69c;border-radius:6px;padding:8px 12px;margin-bottom:12px;font-size:13px}
 form{margin:0}
 .field{margin-bottom:10px}
+.save-btn{border:none;border-radius:6px;padding:7px 14px;font-size:13px;cursor:pointer;color:#fff;transition:background-color .15s ease}
+.save-btn.saved{background:#1e8e3e}
+.save-btn.unsaved{background:#e8710a}
 """
 
 
@@ -259,41 +262,31 @@ def create_app(bootstrap_store: BootstrapStore, store: SettingsStore) -> Flask:
                   </form>
                 </div>
               </div>
-              <form method="post" action="{url_for('update_recipient', index=a['index'])}" class="field" style="margin-top:10px">
-                <label>Digest recipient</label>
-                <div class="row">
+              <form method="post" action="{url_for('update_account_settings', index=a['index'])}"
+                    oninput="markUnsaved(this)" onchange="markUnsaved(this)">
+                <div class="field" style="margin-top:10px">
+                  <label>Digest recipient</label>
                   <input type="text" name="digest_recipient" value="{_esc(a.get('digest_recipient', a['address']))}">
-                  <button type="submit" class="secondary">Save</button>
                 </div>
-              </form>
-              <form method="post" action="{url_for('update_schedule', index=a['index'])}" class="field" style="margin-top:10px">
-                <label>Run time for this account</label>
-                <div class="row">
+                <div class="field">
+                  <label>Run time for this account</label>
                   <input type="text" name="run_at_local_time" value="{_esc(run_at_val)}" placeholder="07:00">
-                  <button type="submit" class="secondary">Save</button>
                 </div>
-              </form>
-              <form method="post" action="{url_for('update_frequency', index=a['index'])}" class="field" style="margin-top:10px">
-                <label>Run frequency for this account</label>
-                <div class="row">
+                <div class="field">
+                  <label>Run frequency for this account</label>
                   <select name="digest_frequency" onchange="toggleWeekday(this, '{weekday_wrap_id}')">
                     <option value="daily" {"selected" if frequency_val == "daily" else ""}>Daily</option>
                     <option value="weekly" {"selected" if frequency_val == "weekly" else ""}>Weekly</option>
                   </select>
-                  <button type="submit" class="secondary">Save</button>
                 </div>
-              </form>
-              <div id="{weekday_wrap_id}" style="display:{'block' if frequency_val == 'weekly' else 'none'}">
-                <form method="post" action="{url_for('update_weekday', index=a['index'])}" class="field" style="margin-top:10px">
+                <div class="field" id="{weekday_wrap_id}" style="display:{'block' if frequency_val == 'weekly' else 'none'}">
                   <label>Weekly run day for this account</label>
-                  <div class="row">
-                    <select name="digest_weekday">
-                      {_weekday_options(weekday_val)}
-                    </select>
-                    <button type="submit" class="secondary">Save</button>
-                  </div>
-                </form>
-              </div>
+                  <select name="digest_weekday">
+                    {_weekday_options(weekday_val)}
+                  </select>
+                </div>
+                <button type="submit" class="save-btn saved">Saved</button>
+              </form>
             </div>""")
 
         accounts_html = "".join(account_cards) or '<div class="card muted">No Gmail accounts connected yet.</div>'
@@ -341,6 +334,20 @@ def create_app(bootstrap_store: BootstrapStore, store: SettingsStore) -> Flask:
         function toggleWeekday(sel, wrapId) {{
           document.getElementById(wrapId).style.display = sel.value === 'weekly' ? 'block' : 'none';
         }}
+        // Round 19: one Save button per account card, tracking whether
+        // *that account's own form* has unsaved changes - turns orange the
+        // moment anything in it changes, and only that form's button (not
+        // any other account's) is affected. Goes back to green "Saved"
+        // automatically on the next page load, which is exactly what
+        // happens right after a successful save (the POST redirects back
+        // to this same dashboard page).
+        function markUnsaved(form) {{
+          var btn = form.querySelector('.save-btn');
+          if (btn) {{
+            btn.classList.remove('saved');
+            btn.classList.add('unsaved');
+          }}
+        }}
         </script>
         """
         return _page("Gmail AI Sorter", body)
@@ -371,42 +378,42 @@ def create_app(bootstrap_store: BootstrapStore, store: SettingsStore) -> Flask:
         return redirect(url_for("dashboard", flash="Settings saved."))
 
     # ---- account actions -----------------------------------------------------------
-    @app.post("/accounts/<int:index>/recipient")
-    def update_recipient(index: int):
+    # Round 19: recipient/run time/frequency/weekday used to be four
+    # separate forms, each with its own Save button (Joe: "can we change it
+    # in the accounts section so there is just one save button at the
+    # bottom rather than next to each box") - now one form, one route, one
+    # atomic save: either every field on the card is valid and all four are
+    # written together, or nothing is written and the flash says which
+    # field was the problem.
+    @app.post("/accounts/<int:index>/settings")
+    def update_account_settings(index: int):
         recipient = request.form.get("digest_recipient", "").strip()
-        if recipient:
-            store.update_account(index, digest_recipient=recipient)
-        return redirect(url_for("dashboard", flash="Digest recipient updated."))
+        if not recipient:
+            return redirect(url_for("dashboard", flash="Digest recipient can't be blank - nothing saved."))
 
-    @app.post("/accounts/<int:index>/schedule")
-    def update_schedule(index: int):
-        # Round 18: run time is purely a per-account setting now - there's
-        # no global default left to fall back to, so a blank/invalid value
-        # is rejected outright rather than treated as "use the default".
         run_at = request.form.get("run_at_local_time", "").strip()
         try:
             hh, mm = run_at.split(":")
             int(hh), int(mm)
         except ValueError:
-            return redirect(url_for("dashboard", flash="Run time must be HH:MM - not saved."))
-        store.update_account(index, run_at_local_time=run_at)
-        return redirect(url_for("dashboard", flash=f"Run time for this account set to {run_at}."))
+            return redirect(url_for("dashboard", flash="Run time must be HH:MM - nothing saved."))
 
-    @app.post("/accounts/<int:index>/frequency")
-    def update_frequency(index: int):
         frequency = request.form.get("digest_frequency", "").strip()
         if frequency not in ("daily", "weekly"):
-            return redirect(url_for("dashboard", flash="Run frequency must be daily or weekly - not saved."))
-        store.update_account(index, digest_frequency=frequency)
-        return redirect(url_for("dashboard", flash=f"Run frequency for this account set to {frequency}."))
+            return redirect(url_for("dashboard", flash="Run frequency must be daily or weekly - nothing saved."))
 
-    @app.post("/accounts/<int:index>/weekday")
-    def update_weekday(index: int):
         weekday = request.form.get("digest_weekday", "").strip().lower()
         if weekday not in WEEKDAY_NAMES:
-            return redirect(url_for("dashboard", flash="Weekly run day must be a real day of the week - not saved."))
-        store.update_account(index, digest_weekday=weekday)
-        return redirect(url_for("dashboard", flash=f"Weekly run day for this account set to {weekday.capitalize()}."))
+            return redirect(url_for("dashboard", flash="Weekly run day must be a real day of the week - nothing saved."))
+
+        store.update_account(
+            index,
+            digest_recipient=recipient,
+            run_at_local_time=run_at,
+            digest_frequency=frequency,
+            digest_weekday=weekday,
+        )
+        return redirect(url_for("dashboard", flash="Account settings saved."))
 
     @app.post("/accounts/<int:index>/remove")
     def remove_account(index: int):
