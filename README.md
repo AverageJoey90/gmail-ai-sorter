@@ -33,8 +33,9 @@ NAS, no `.env` file to hunt for.
 4. Picks the 5 most important emails from everything reviewed (excluding
    anything that went to the School section below, so nothing shows up
    twice) and summarises them. If one describes a dated event, the digest
-   includes an "Add to Calendar" link that opens Google Calendar with the
-   event pre-filled, one click from saved.
+   includes a real "Add to Calendar" link - tapping it opens the native
+   calendar app on whatever device you're reading the digest on (iPhone's
+   Calendar included), rather than a Google-Calendar-specific web page.
 5. Separately, runs its own recent-window search of any label whose name
    *contains* one of your configured School keywords (default just
    `school`, matched case-insensitively anywhere in the label's full
@@ -57,18 +58,38 @@ NAS, no `.env` file to hunt for.
 
 ### Daily vs. weekly
 
-Each account defaults to a **daily** run, but can be set to **weekly**
-instead - either globally (Settings) or per-account (overriding the
-global default, same pattern as the per-account run time). A weekly
-account is still checked at its usual daily run-time each day, but only
-actually fires once about 7 days have passed since its last run - no
-separate day-of-week setting to configure. When it does fire, its
-labelled-folder sweep (step 2 above) looks at a full week of mail
-regardless of read state, rather than only what's unread, since a weekly
-account isn't checked in between runs. The School section (step 5) is
-deliberately **not** affected by this - it's a reminder feature, not part
-of the sort/triage sweep, so its own lookback window (`school_lookback_days`
-in Settings) stays whatever you've set it to regardless of daily/weekly.
+Run time, frequency, and weekly run day are all set **per Gmail account**,
+on that account's own card on the dashboard - there's no global default to
+fall back to. A newly-connected account starts out daily at 07:00; change
+it to **weekly** and a day-of-week picker appears right there on the card.
+Set the run time to `08:00` and the weekly day to `Monday`, and that
+account's sort+digest fires every Monday at 8am, not "roughly once a week
+since it last ran".
+When it does fire, its labelled-folder sweep (step 2 above) looks at a
+full week of mail regardless of read state, rather than only what's
+unread, since a weekly account isn't checked in between runs. The School
+section (step 5) is deliberately **not** affected by any of this - it's a
+reminder feature, not part of the sort/triage sweep, so its own lookback
+window (`school_lookback_days` in Settings) stays whatever you've set it
+to regardless of daily/weekly or which day is chosen.
+
+### Add to Calendar links (iPhone-friendly)
+
+Any event the AI finds - in "Good to know" or "School" - gets an "Add to
+Calendar" link built from a real `.ics` file rather than a
+`calendar.google.com` web link (what earlier versions of this project
+used). The dashboard serves that `.ics` file from a small, unauthenticated
+`/ics/<token>` link - deliberately reachable without logging into the
+dashboard first, since the person tapping it is reading an email, not
+using the dashboard. Tapping it opens the native "Add to Calendar" sheet
+on the device you're reading it on: Apple's Calendar app on iPhone/iPad/
+Mac, or whatever calendar app is registered on Android/desktop. The token
+in the link is an unguessable random ID (not sequential, not derived from
+anything else) - anyone who has that exact link can see that one event's
+title/time/location, which is the same practical exposure as the old
+Google Calendar link already had (it put those same details directly in
+a public URL). Event files are kept for 90 days and cleaned up
+automatically after that.
 
 ## The dashboard (port 4568)
 
@@ -77,9 +98,13 @@ in Settings) stays whatever you've set it to regardless of daily/weekly.
 - **Per-account digest recipient**, editable any time.
 - **Run now** - trigger an immediate sort+digest for one account or all of
   them, without waiting for the schedule.
-- **Settings** - run time, run frequency (daily/weekly, each overridable
-  per account), label-match confidence threshold, a list of labels the AI
-  should never sort into, a list of keywords that route a label to its own
+- **Per-account run time, frequency, and weekly day** - each Gmail
+  account's own card has its run time, daily/weekly frequency, and (only
+  shown once you pick Weekly) which day of the week it fires on. No global
+  schedule to keep in sync - just set each account the way you want it.
+- **Settings** - label-match confidence threshold, a list of
+  labels the AI should never sort into, a list of keywords that route a
+  label to its own
   dedicated "School" digest section (defaults to `School`, matched as a
   substring anywhere in a label's full name/path - so it also catches a
   nested label or a differently-worded one, not just a label named
@@ -88,7 +113,7 @@ in Settings) stays whatever you've set it to regardless of daily/weekly.
   the general "Good to know" ranking), and how many days back the School
   section itself checks (default 14 -
   set it to whatever window makes sense as a reminder, e.g. 21 for three
-  weeks, independent of the daily/weekly run frequency above).
+  weeks, independent of each account's own run frequency above).
 - **Last run status** per account (counts, or an error if something went
   wrong).
 
@@ -482,10 +507,11 @@ with no terminal involved.
    approve access. You're bounced back to the dashboard showing it
    connected. Repeat for the second account (sign out of Google or use an
    incognito window so the picker offers the other account).
-3. Adjust **Settings** if you want (run time, daily/weekly frequency,
-   confidence threshold, ignore list, School-section labels and lookback
-   days), and set each account's digest recipient if you want the digest
-   to land somewhere other than the account's own inbox.
+3. On each account's card, set its run time, daily/weekly frequency (pick
+   Weekly to reveal a day-of-week picker), and digest recipient if you
+   want the digest to land somewhere other than the account's own inbox.
+   Adjust **Settings** if you want (confidence threshold, ignore list,
+   School-section labels and lookback days).
 4. Click **Run now** on an account rather than waiting for the schedule,
    then refresh in a minute or two. Check: did the digest email arrive?
    Did a couple of inbox emails get labelled and archived? Does a "Needs

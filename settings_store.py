@@ -15,7 +15,6 @@ from typing import Any
 DEFAULTS: dict[str, Any] = {
     "accounts": [],  # [{"index", "address", "digest_recipient", "connected_at", "last_run": {...} | None}]
     "next_index": 1,
-    "run_at_local_time": "07:00",
     "timezone": "Europe/London",
     "ignore_labels": [],
     "classify_confidence_threshold": 0.7,
@@ -33,15 +32,43 @@ DEFAULTS: dict[str, Any] = {
     # e.g. 21 for three weeks of lookback without changing how often the
     # digest itself runs.
     "school_lookback_days": 14,
-    # "daily" (default) or "weekly" - how often the sort+digest run fires.
-    # Can be overridden per-account (see add_account below); an account
-    # left at None uses this global default. Weekly accounts still get
-    # checked at their usual daily run-time, but only actually fire once
-    # ~7 days have passed since their last run (see main.py's _is_due) -
-    # and their labelled-folder sweep looks at everything from the last 7
-    # days rather than only unread mail (see pipeline.py).
-    "digest_frequency": "daily",
 }
+
+# Round 18: Joe asked for the run time / frequency / weekday to be purely
+# per-account settings ("there dosent need to be a run daily or weekley
+# global variable in settings this can be removed and have this setting in
+# each account. same as run time, this can be removed from global settings
+# as there is a box in each account again") - so these are no longer part
+# of DEFAULTS/get_settings() at all, and every account record always holds
+# a real value for all three (add_account seeds them below; the dashboard's
+# per-account forms always save a real value too - see web_app.py). These
+# constants exist only as the seed value for a newly-connected account and
+# as a defensive fallback in main.py/web_app.py for an account record saved
+# by a pre-round-18 version of this app that still has one of these fields
+# set to None (from the old "None = use the global default" scheme).
+DEFAULT_RUN_AT_LOCAL_TIME = "07:00"
+DEFAULT_DIGEST_FREQUENCY = "daily"
+DEFAULT_DIGEST_WEEKDAY = "monday"
+
+# Shared by main.py's scheduler (deciding whether a weekly account is due
+# today) and web_app.py's dashboard (rendering/validating the day picker).
+# Lives here rather than in either of those two modules specifically to
+# avoid a circular import - main.py imports web_app.py, so a constant
+# either of them needed couldn't live in the other.
+WEEKDAY_NAMES = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+
+
+def weekday_index(name: str | None, fallback: str = DEFAULT_DIGEST_WEEKDAY) -> int:
+    """Maps a day name to Python's date.weekday() convention (0=Monday .. 6=Sunday),
+    defensively falling back to `fallback` (itself falling back to Monday) for
+    anything missing/unrecognised rather than raising."""
+    try:
+        return WEEKDAY_NAMES.index((name or fallback).strip().lower())
+    except (ValueError, AttributeError):
+        try:
+            return WEEKDAY_NAMES.index(fallback)
+        except ValueError:
+            return 0
 
 
 class SettingsStore:
@@ -84,8 +111,13 @@ class SettingsStore:
                 "index": index,
                 "address": address,
                 "digest_recipient": address,
-                "run_at_local_time": None,  # None = use the global default run_at_local_time setting
-                "digest_frequency": None,  # None = use the global default digest_frequency setting
+                # Round 18: these are the account's own real settings from
+                # the moment it's connected, not "None = use the global
+                # default" - seeded with sensible defaults, changeable any
+                # time from its card on the dashboard.
+                "run_at_local_time": DEFAULT_RUN_AT_LOCAL_TIME,
+                "digest_frequency": DEFAULT_DIGEST_FREQUENCY,
+                "digest_weekday": DEFAULT_DIGEST_WEEKDAY,
                 "connected_at": datetime.now(timezone.utc).isoformat(),
                 "last_run": None,
             })

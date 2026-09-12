@@ -12,10 +12,36 @@ from ai_client import AiClient
 from config import BootstrapConfig
 from digest_builder import DigestData, build_digest_html
 from gmail_client import GmailClient
+from ics_builder import build_ics
+from ics_store import IcsStore
 from oauth_web import token_path_for
-from settings_store import SettingsStore
+from settings_store import DEFAULT_DIGEST_FREQUENCY, SettingsStore
 
 log = logging.getLogger(__name__)
+
+
+def _build_calendar_link(item: dict, ics_store: IcsStore, public_base_url: str) -> str | None:
+    """If `item` (an AI-ranked "Good to know"/School entry) describes a
+    dated event, builds its .ics file, saves it via `ics_store`, and
+    returns a link to the dashboard's `/ics/<token>.ics` route that serves
+    it - tapping that link is what triggers a native "Add to Calendar"
+    prompt on the device (iPhone included), since it's a real .ics file
+    with a text/calendar content type rather than a Google-Calendar-only
+    web link. Returns None (no calendar link shown) if there's no event,
+    or its start time couldn't be parsed."""
+    if not item.get("is_event") or not item.get("event_start"):
+        return None
+    ics_bytes = build_ics(
+        title=item.get("event_title") or item.get("subject", ""),
+        start_iso=item["event_start"],
+        end_iso=item.get("event_end", ""),
+        location=item.get("event_location", ""),
+        description=item.get("summary", ""),
+    )
+    if not ics_bytes:
+        return None
+    token = ics_store.save_event(ics_bytes)
+    return f"{public_base_url.rstrip('/')}/ics/{token}.ics"
 
 
 def run_account(account: dict, bootstrap: BootstrapConfig, settings: dict, ai: AiClient) -> dict:
@@ -28,6 +54,7 @@ def run_account(account: dict, bootstrap: BootstrapConfig, settings: dict, ai: A
 
     token_file = token_path_for(bootstrap, index)
     gmail = GmailClient(token_file)
+    ics_store = IcsStore(bootstrap.data_dir)
 
     ignore_labels = set(settings.get("ignore_labels", []))
     threshold = float(settings.get("classify_confidence_threshold", 0.7))
@@ -48,11 +75,13 @@ def run_account(account: dict, bootstrap: BootstrapConfig, settings: dict, ai: A
     def _is_school_label(name: str) -> bool:
         lowered = name.strip().lower()
         return any(kw in lowered for kw in school_keywords)
-    # "daily" (the global default, or this account's own override) means the
+    # "daily" (this account's own setting - see settings_store.py) means the
     # labelled-folder sweep below only looks at unread mail, same as always;
     # "weekly" broadens that to everything from the last 7 days regardless
     # of read state, since a weekly account isn't checked in between.
-    frequency = account.get("digest_frequency") or settings.get("digest_frequency", "daily")
+    # `or DEFAULT_DIGEST_FREQUENCY` is only a defensive fallback for an
+    # account record saved by a pre-round-18 version of this app.
+    frequency = account.get("digest_frequency") or DEFAULT_DIGEST_FREQUENCY
 
     label_map = gmail.list_user_labels(ignore=ignore_labels)
     label_names = list(label_map.keys())
@@ -207,7 +236,9 @@ def run_account(account: dict, bootstrap: BootstrapConfig, settings: dict, ai: A
                 base = all_reviewed.get(r["ref"])
                 if not base:
                     continue
-                top_picks.append({**r, "subject": base["subject"], "sender": base["sender"], "gmail_link": base.get("gmail_link")})
+                item = {**r, "subject": base["subject"], "sender": base["sender"], "gmail_link": base.get("gmail_link")}
+                item["calendar_link"] = _build_calendar_link(item, ics_store, bootstrap.public_base_url)
+                top_picks.append(item)
         except Exception:
             log.exception("%s: importance ranking failed, omitting 'Good to know' section", address)
 
@@ -268,7 +299,9 @@ def run_account(account: dict, bootstrap: BootstrapConfig, settings: dict, ai: A
                     base = school_lookup.get(r["ref"])
                     if not base:
                         continue
-                    school_items.append({**r, "subject": base["subject"], "sender": base["sender"], "gmail_link": base.get("gmail_link")})
+                    item = {**r, "subject": base["subject"], "sender": base["sender"], "gmail_link": base.get("gmail_link")}
+                    item["calendar_link"] = _build_calendar_link(item, ics_store, bootstrap.public_base_url)
+                    school_items.append(item)
             except Exception:
                 log.exception("%s: School ranking failed, falling back to the most recent School emails", address)
                 for c in school_candidates[:3]:

@@ -16,8 +16,6 @@ from __future__ import annotations
 import html
 from dataclasses import dataclass, field
 
-from ics_builder import build_google_calendar_link
-
 STYLE = """
 body{font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#1a1a1a;background:#fff;margin:0;padding:0}
 .wrap{width:100%;background:#fff}
@@ -86,8 +84,8 @@ class DigestData:
     left_in_inbox_count: int
     needs_reply_count: int
     needs_reply_items: list[dict] = field(default_factory=list)     # {subject, sender, summary, reply_gist, draft_link}
-    top_important: list[dict] = field(default_factory=list)          # {subject, sender, summary, is_event, event_*, gmail_link}
-    school_items: list[dict] = field(default_factory=list)           # {subject, sender, summary, is_event, event_*, gmail_link}
+    top_important: list[dict] = field(default_factory=list)          # {subject, sender, summary, calendar_link, gmail_link}
+    school_items: list[dict] = field(default_factory=list)           # {subject, sender, summary, calendar_link, gmail_link}
     sorted_items: list[dict] = field(default_factory=list)           # {subject, sender, label, gmail_link}
     unmatched_items: list[dict] = field(default_factory=list)        # {subject, sender, reason, gmail_link}
     timezone: str = "Europe/London"
@@ -133,29 +131,27 @@ def _fallback_good_to_know(d: DigestData, limit: int = 5) -> list[dict]:
     return items[:limit]
 
 
-def _render_items(items: list[dict], tz: str, variant: str = "good") -> str:
+def _render_items(items: list[dict], variant: str = "good") -> str:
     """Shared renderer for a list of numbered "goodbox" items (used by both
     "Good to know" and "School") - same summary/Add-to-Calendar/Open-link
     layout either way, just a different background tint per variant (light
     green for Good to know, light purple for School) so the two sections
-    stay visually distinct at a glance."""
+    stay visually distinct at a glance.
+
+    The Add to Calendar link (`calendar_link`, when present) is a fully-built
+    URL already - pipeline.py generates the actual .ics file for any event
+    and hands back a link to a small dashboard endpoint that serves it, so
+    tapping it opens the device's native calendar app (iPhone included) -
+    see ics_builder.py/ics_store.py for why that replaced the older
+    calendar.google.com/render link Gmail-only approach."""
     parts = []
     box_class = "goodbox" if variant == "good" else f"goodbox {variant}"
     for idx, item in enumerate(items, start=1):
         parts.append(f'<div class="{box_class}">')
         parts.append(f'<div class="gtitle">{idx}. {_esc(item["subject"])}</div>')
         parts.append(f'<div class="gbody">{_esc(item.get("summary", ""))}</div>')
-        if item.get("is_event") and item.get("event_start"):
-            cal_link = build_google_calendar_link(
-                title=item.get("event_title") or item["subject"],
-                start_iso=item["event_start"],
-                end_iso=item.get("event_end", ""),
-                location=item.get("event_location", ""),
-                description=item.get("summary", ""),
-                tz=tz,
-            )
-            if cal_link:
-                parts.append(f'<a class="btn-cal" href="{_esc(cal_link)}">Add to Calendar &rarr;</a>')
+        if item.get("calendar_link"):
+            parts.append(f'<a class="btn-cal" href="{_esc(item["calendar_link"])}">Add to Calendar &rarr;</a>')
         if item.get("gmail_link"):
             parts.append(f'<a class="openlink" href="{_esc(item["gmail_link"])}">Open &rarr;</a>')
         parts.append("</div>")
@@ -200,7 +196,7 @@ def build_digest_html(d: DigestData) -> str:
     if not good_items:
         parts.append('<div class="empty">Nothing new to flag today.</div>')
     else:
-        parts.append(_render_items(good_items, d.timezone))
+        parts.append(_render_items(good_items))
 
     # School - top 3 from the School label(s), kept separate from Good to
     # know above so nothing shows up twice (see pipeline.py).
@@ -208,7 +204,7 @@ def build_digest_html(d: DigestData) -> str:
     if not d.school_items:
         parts.append('<div class="empty">Nothing new from School to flag today.</div>')
     else:
-        parts.append(_render_items(d.school_items, d.timezone, variant="school"))
+        parts.append(_render_items(d.school_items, variant="school"))
 
     # Sorted
     parts.append("<h2>Sorted &mdash; label applied, archived out of Inbox</h2>")

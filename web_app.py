@@ -17,13 +17,20 @@ import shutil
 import threading
 from pathlib import Path
 
-from flask import Flask, g, redirect, request, session, url_for
+from flask import Flask, Response, g, redirect, request, session, url_for
 
 import oauth_web
 import pipeline
 from ai_client import AiClient
 from config import BootstrapStore, is_bootstrap_complete, missing_fields
-from settings_store import SettingsStore
+from ics_store import IcsStore
+from settings_store import (
+    DEFAULT_DIGEST_FREQUENCY,
+    DEFAULT_DIGEST_WEEKDAY,
+    DEFAULT_RUN_AT_LOCAL_TIME,
+    SettingsStore,
+    WEEKDAY_NAMES,
+)
 
 log = logging.getLogger(__name__)
 
@@ -55,6 +62,16 @@ def _esc(s: str) -> str:
     return html.escape(s or "")
 
 
+def _weekday_options(selected: str) -> str:
+    """Renders <option> tags for a weekday <select> - every account always
+    has a real weekday value (see settings_store.py), so there's no blank/
+    "use the default" option to render here any more."""
+    opts = []
+    for name in WEEKDAY_NAMES:
+        opts.append(f'<option value="{name}" {"selected" if selected == name else ""}>{name.capitalize()}</option>')
+    return "".join(opts)
+
+
 def create_app(bootstrap_store: BootstrapStore, store: SettingsStore) -> Flask:
     app = Flask(__name__)
     app.secret_key = bootstrap_store.resolve().flask_secret_key
@@ -70,7 +87,7 @@ def create_app(bootstrap_store: BootstrapStore, store: SettingsStore) -> Flask:
     # ---- setup gate: nothing else works until the 5 required fields are set ---
     @app.before_request
     def require_setup():
-        if request.endpoint in ("setup_form", "setup_submit", "static"):
+        if request.endpoint in ("setup_form", "setup_submit", "serve_ics", "static"):
             return None
         if not is_bootstrap_complete(g.bootstrap):
             return redirect(url_for("setup_form"))
@@ -79,7 +96,7 @@ def create_app(bootstrap_store: BootstrapStore, store: SettingsStore) -> Flask:
     # ---- auth gate -----------------------------------------------------------
     @app.before_request
     def require_login():
-        if request.endpoint in ("login_form", "login_submit", "setup_form", "setup_submit", "static"):
+        if request.endpoint in ("login_form", "login_submit", "setup_form", "setup_submit", "serve_ics", "static"):
             return None
         if not session.get("authed"):
             return redirect(url_for("login_form"))
@@ -213,6 +230,18 @@ def create_app(bootstrap_store: BootstrapStore, store: SettingsStore) -> Flask:
             else:
                 status = "Not run yet."
 
+            # Round 18: run time/frequency/weekday are this account's own
+            # settings, not an optional override of a global default (Joe:
+            # "this can be removed from global settings as there is a box
+            # in each account again") - every account record always holds a
+            # real value for all three (see settings_store.py), so these
+            # `or DEFAULT_*` fallbacks only matter for an account saved by a
+            # pre-round-18 version of this app.
+            run_at_val = a.get("run_at_local_time") or DEFAULT_RUN_AT_LOCAL_TIME
+            frequency_val = a.get("digest_frequency") or DEFAULT_DIGEST_FREQUENCY
+            weekday_val = a.get("digest_weekday") or DEFAULT_DIGEST_WEEKDAY
+            weekday_wrap_id = f"weekday-wrap-{a['index']}"
+
             account_cards.append(f"""
             <div class="card">
               <div class="row">
@@ -238,23 +267,33 @@ def create_app(bootstrap_store: BootstrapStore, store: SettingsStore) -> Flask:
                 </div>
               </form>
               <form method="post" action="{url_for('update_schedule', index=a['index'])}" class="field" style="margin-top:10px">
-                <label>Run time for this account (blank = use the default above, {_esc(settings['run_at_local_time'])})</label>
+                <label>Run time for this account</label>
                 <div class="row">
-                  <input type="text" name="run_at_local_time" value="{_esc(a.get('run_at_local_time') or '')}" placeholder="{_esc(settings['run_at_local_time'])}">
+                  <input type="text" name="run_at_local_time" value="{_esc(run_at_val)}" placeholder="07:00">
                   <button type="submit" class="secondary">Save</button>
                 </div>
               </form>
               <form method="post" action="{url_for('update_frequency', index=a['index'])}" class="field" style="margin-top:10px">
-                <label>Run frequency for this account (blank = use the default above, {_esc(settings['digest_frequency'])})</label>
+                <label>Run frequency for this account</label>
                 <div class="row">
-                  <select name="digest_frequency">
-                    <option value="" {"selected" if not a.get("digest_frequency") else ""}>Default ({_esc(settings['digest_frequency'])})</option>
-                    <option value="daily" {"selected" if a.get("digest_frequency") == "daily" else ""}>Daily</option>
-                    <option value="weekly" {"selected" if a.get("digest_frequency") == "weekly" else ""}>Weekly</option>
+                  <select name="digest_frequency" onchange="toggleWeekday(this, '{weekday_wrap_id}')">
+                    <option value="daily" {"selected" if frequency_val == "daily" else ""}>Daily</option>
+                    <option value="weekly" {"selected" if frequency_val == "weekly" else ""}>Weekly</option>
                   </select>
                   <button type="submit" class="secondary">Save</button>
                 </div>
               </form>
+              <div id="{weekday_wrap_id}" style="display:{'block' if frequency_val == 'weekly' else 'none'}">
+                <form method="post" action="{url_for('update_weekday', index=a['index'])}" class="field" style="margin-top:10px">
+                  <label>Weekly run day for this account</label>
+                  <div class="row">
+                    <select name="digest_weekday">
+                      {_weekday_options(weekday_val)}
+                    </select>
+                    <button type="submit" class="secondary">Save</button>
+                  </div>
+                </form>
+              </div>
             </div>""")
 
         accounts_html = "".join(account_cards) or '<div class="card muted">No Gmail accounts connected yet.</div>'
@@ -271,20 +310,9 @@ def create_app(bootstrap_store: BootstrapStore, store: SettingsStore) -> Flask:
         </form>
 
         <h2>Settings</h2>
+        <p class="muted">Run time, run frequency, and weekly run day are set per Gmail account now - see each account's card above.</p>
         <div class="card">
         <form method="post" action="{url_for('save_settings')}">
-          <div class="field">
-            <label for="run_at">Run time ({_esc(settings['timezone'])})</label>
-            <input type="text" id="run_at" name="run_at_local_time" value="{_esc(settings['run_at_local_time'])}" placeholder="07:00">
-          </div>
-          <div class="field">
-            <label for="frequency">Run frequency</label>
-            <select id="frequency" name="digest_frequency">
-              <option value="daily" {"selected" if settings['digest_frequency'] == "daily" else ""}>Daily</option>
-              <option value="weekly" {"selected" if settings['digest_frequency'] == "weekly" else ""}>Weekly (checks a full week of mail in each labelled folder, not just unread)</option>
-            </select>
-            <div class="muted">Any account can override this individually below.</div>
-          </div>
           <div class="field">
             <label for="threshold">Label-match confidence threshold (0-1)</label>
             <input type="number" id="threshold" name="classify_confidence_threshold" step="0.05" min="0" max="1"
@@ -303,27 +331,22 @@ def create_app(bootstrap_store: BootstrapStore, store: SettingsStore) -> Flask:
             <label for="school_lookback_days">School section lookback (days)</label>
             <input type="number" id="school_lookback_days" name="school_lookback_days" step="1" min="1" max="180"
                    value="{settings['school_lookback_days']}">
-            <div class="muted">How far back the School section checks for upcoming events/reminders - independent of the run frequency above (e.g. 21 for three weeks). Doesn't change what gets sorted or how often the digest runs.</div>
+            <div class="muted">How far back the School section checks for upcoming events/reminders - independent of each account's own run frequency (e.g. 21 for three weeks). Doesn't change what gets sorted or how often the digest runs.</div>
           </div>
           <button type="submit">Save settings</button>
         </form>
         </div>
+
+        <script>
+        function toggleWeekday(sel, wrapId) {{
+          document.getElementById(wrapId).style.display = sel.value === 'weekly' ? 'block' : 'none';
+        }}
+        </script>
         """
         return _page("Gmail AI Sorter", body)
 
     @app.post("/settings")
     def save_settings():
-        run_at = request.form.get("run_at_local_time", "07:00").strip()
-        try:
-            hh, mm = run_at.split(":")
-            int(hh), int(mm)
-        except ValueError:
-            return redirect(url_for("dashboard", flash="Run time must be HH:MM - not saved."))
-
-        frequency = request.form.get("digest_frequency", "daily").strip()
-        if frequency not in ("daily", "weekly"):
-            frequency = "daily"
-
         try:
             threshold = max(0.0, min(1.0, float(request.form.get("classify_confidence_threshold", 0.7))))
         except ValueError:
@@ -340,8 +363,6 @@ def create_app(bootstrap_store: BootstrapStore, store: SettingsStore) -> Flask:
             return redirect(url_for("dashboard", flash="School section lookback must be a whole number of days (1 or more) - not saved."))
 
         store.update_settings(
-            run_at_local_time=run_at,
-            digest_frequency=frequency,
             classify_confidence_threshold=threshold,
             ignore_labels=ignore_labels,
             school_section_labels=school_section_labels,
@@ -359,11 +380,10 @@ def create_app(bootstrap_store: BootstrapStore, store: SettingsStore) -> Flask:
 
     @app.post("/accounts/<int:index>/schedule")
     def update_schedule(index: int):
+        # Round 18: run time is purely a per-account setting now - there's
+        # no global default left to fall back to, so a blank/invalid value
+        # is rejected outright rather than treated as "use the default".
         run_at = request.form.get("run_at_local_time", "").strip()
-        if not run_at:
-            # Blank means "use the default run time" - clear any override.
-            store.update_account(index, run_at_local_time=None)
-            return redirect(url_for("dashboard", flash="This account now uses the default run time."))
         try:
             hh, mm = run_at.split(":")
             int(hh), int(mm)
@@ -375,14 +395,18 @@ def create_app(bootstrap_store: BootstrapStore, store: SettingsStore) -> Flask:
     @app.post("/accounts/<int:index>/frequency")
     def update_frequency(index: int):
         frequency = request.form.get("digest_frequency", "").strip()
-        if not frequency:
-            # Blank means "use the default frequency" - clear any override.
-            store.update_account(index, digest_frequency=None)
-            return redirect(url_for("dashboard", flash="This account now uses the default run frequency."))
         if frequency not in ("daily", "weekly"):
             return redirect(url_for("dashboard", flash="Run frequency must be daily or weekly - not saved."))
         store.update_account(index, digest_frequency=frequency)
         return redirect(url_for("dashboard", flash=f"Run frequency for this account set to {frequency}."))
+
+    @app.post("/accounts/<int:index>/weekday")
+    def update_weekday(index: int):
+        weekday = request.form.get("digest_weekday", "").strip().lower()
+        if weekday not in WEEKDAY_NAMES:
+            return redirect(url_for("dashboard", flash="Weekly run day must be a real day of the week - not saved."))
+        store.update_account(index, digest_weekday=weekday)
+        return redirect(url_for("dashboard", flash=f"Weekly run day for this account set to {weekday.capitalize()}."))
 
     @app.post("/accounts/<int:index>/remove")
     def remove_account(index: int):
@@ -419,6 +443,23 @@ def create_app(bootstrap_store: BootstrapStore, store: SettingsStore) -> Flask:
         cfg = g.bootstrap  # captured before the thread starts - see run_one above
         threading.Thread(target=pipeline.run_all, args=(cfg, store), daemon=True).start()
         return redirect(url_for("dashboard", flash="Run started for all accounts - refresh in a minute or two for results."))
+
+    # ---- calendar event links -----------------------------------------------------------
+    # Deliberately exempt from login/setup below: this is the link a digest
+    # email's "Add to Calendar" button points at, opened straight from
+    # whatever mail/browser app the recipient is using (often not logged
+    # into this dashboard at all) - tapping it needs to just work. The
+    # token is an unguessable UUID4, so this has the same practical
+    # exposure as the older calendar.google.com link it replaced (which put
+    # the event details directly in a public URL instead of behind a
+    # token) - see ics_store.py.
+    @app.get("/ics/<token>.ics")
+    def serve_ics(token: str):
+        ics_store = IcsStore(g.bootstrap.data_dir)
+        data = ics_store.read_event(token)
+        if data is None:
+            return ("This calendar link has expired or wasn't found.", 404)
+        return Response(data, mimetype="text/calendar")
 
     # ---- OAuth connect flow -----------------------------------------------------------
     @app.get("/oauth/start")

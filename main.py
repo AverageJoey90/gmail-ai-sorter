@@ -1,15 +1,14 @@
 """Entry point. Starts four things in one process:
 
 1. A background daemon thread running the scheduler - checks every 60s
-   whether it's time for each connected account's own run time (an
-   optional per-account override, falling back to the global
-   RUN_AT_LOCAL_TIME default) and, if so, whether it's actually due given
-   its frequency (daily, or weekly - also an optional per-account
-   override; a weekly account is checked at the same time of day but only
-   fires once ~7 days have passed since its last run - see `_is_due`), and
-   if so runs that account's sort+digest pipeline once. Accounts are
-   tracked independently, so different run times/frequencies per account
-   all work at once.
+   whether it's time for each connected account's own run time (run
+   time/frequency/weekday are purely per-account settings - see
+   settings_store.py) and, if so, whether it's actually due given its
+   frequency (daily, or weekly - a weekly account fires on its configured
+   day of the week, `digest_weekday`, at that same time of day, see
+   `_is_due`), and if so runs that account's sort+digest pipeline once.
+   Accounts are tracked independently, so different run
+   times/frequencies/weekdays per account all work at once.
 2. A background daemon thread supervising an optional Cloudflare Tunnel
    subprocess (see tunnel_manager.py) - reacts within seconds to a tunnel
    token being entered, changed, or cleared on the dashboard's Setup page.
@@ -40,7 +39,13 @@ from waitress import serve
 import pipeline
 from ai_client import AiClient
 from config import BootstrapStore, is_bootstrap_complete
-from settings_store import SettingsStore
+from settings_store import (
+    DEFAULT_DIGEST_FREQUENCY,
+    DEFAULT_DIGEST_WEEKDAY,
+    DEFAULT_RUN_AT_LOCAL_TIME,
+    SettingsStore,
+    weekday_index,
+)
 from state_store import StateStore
 from tailscale_manager import TailscaleManager
 from tunnel_manager import TunnelManager
@@ -67,16 +72,30 @@ def _parse_hh_mm(value: str, fallback: str) -> tuple[int, int]:
         return int(hh), int(mm)
 
 
-def _is_due(frequency: str, days_since: int | None) -> bool:
+def _is_due(
+    frequency: str,
+    days_since: int | None,
+    today_weekday: int | None = None,
+    target_weekday: int | None = None,
+) -> bool:
     """Given that it's already this account's scheduled time-of-day (an
     hour/minute match was just checked by the caller), decides whether it
     should actually fire today. `days_since` is how long ago it last ran
     (None = never run before). Daily accounts are due unless they already
     ran today (days_since == 0, e.g. a container restart mid-day re-checked
-    the same minute). Weekly accounts are checked at their usual daily
-    time-of-day too - there's no separate day-of-week setting - but only
-    actually fire once ~7 days have passed since their last run."""
+    the same minute).
+
+    Weekly accounts fire on a specific day of the week (`target_weekday`,
+    Monday=0..Sunday=6, same convention as date.weekday()) rather than
+    "roughly every 7 days" - due when today is that day and it hasn't
+    already run today. `today_weekday`/`target_weekday` are optional
+    (defaulting to None) purely so this stays a pure, easily-testable
+    function and old call sites that don't care about weekdays still work;
+    if either is omitted, falls back to the original "~7 days elapsed"
+    cadence instead of a hard weekday match."""
     if frequency == "weekly":
+        if today_weekday is not None and target_weekday is not None:
+            return today_weekday == target_weekday and days_since != 0
         return days_since is None or days_since >= 7
     return days_since != 0
 
@@ -94,23 +113,25 @@ def scheduler_loop(bootstrap_store: BootstrapStore, store: SettingsStore) -> Non
 
             settings = store.get_settings()
             tz = ZoneInfo(settings.get("timezone", "Europe/London"))
-            default_run_at = settings.get("run_at_local_time", "07:00")
             now = datetime.now(tz)
             today_str = now.strftime("%Y-%m-%d")
 
-            # Each account fires at its own run time (an optional override on
-            # the account record) or the global default if it hasn't set
-            # one - so two accounts on different schedules are each checked
-            # and marked as run independently, rather than one shared
-            # HH:MM triggering every account at once.
-            default_frequency = settings.get("digest_frequency", "daily")
+            # Round 18: run time/frequency/weekday are purely per-account
+            # settings now (see settings_store.py) - every account record
+            # holds a real value for all three from the moment it's
+            # connected, so two accounts on different schedules are each
+            # checked and marked as run independently. The DEFAULT_* constants
+            # here are only a defensive fallback for an account record saved
+            # by a pre-round-18 version of this app that still has one of
+            # these fields set to None.
             for account in store.list_accounts():
-                hh, mm = _parse_hh_mm(account.get("run_at_local_time") or "", default_run_at)
+                hh, mm = _parse_hh_mm(account.get("run_at_local_time") or "", DEFAULT_RUN_AT_LOCAL_TIME)
                 if now.hour != hh or now.minute != mm:
                     continue
-                frequency = account.get("digest_frequency") or default_frequency
+                frequency = account.get("digest_frequency") or DEFAULT_DIGEST_FREQUENCY
+                target_weekday = weekday_index(account.get("digest_weekday") or DEFAULT_DIGEST_WEEKDAY)
                 days_since = state.days_since_last_run(account["address"], now.date())
-                if not _is_due(frequency, days_since):
+                if not _is_due(frequency, days_since, now.weekday(), target_weekday):
                     continue
                 log.info(
                     "Scheduled run starting for %s (run time %02d:%02d, %s)",
