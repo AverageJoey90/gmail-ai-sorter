@@ -20,12 +20,54 @@ from __future__ import annotations
 
 import json
 import logging
+import random
+import time
 
 import requests
 
 log = logging.getLogger(__name__)
 
 API_URL_TMPL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+
+# Google's free tier for gemini-2.5-flash is only ~10 requests/minute, and
+# with two Gmail accounts sharing one key it's easy to burst past that
+# during a busy run - see 429 Too Many Requests in the container logs.
+# Retried here rather than left to fail immediately: 429 (rate limit) and
+# 503 (temporarily overloaded) are both transient per Google's own
+# troubleshooting guidance, unlike a 400 (bad request) or 403 (bad key),
+# which are retried exactly as often (never).
+RETRYABLE_STATUS_CODES = {429, 503}
+MAX_RETRIES = 4
+BASE_DELAY_SECONDS = 1.0
+# Cap any single wait (whether from our own backoff or a server-suggested
+# delay) at 30s - if Google's error body says to wait minutes (e.g. the
+# *daily* quota, not just the per-minute one, is exhausted), no amount of
+# retrying within one run will help, so fail fast and let this email fall
+# through to the existing "left in inbox, will retry next run" handling
+# instead of stalling the whole account's run.
+MAX_DELAY_SECONDS = 30.0
+
+
+def _retry_delay_from_response(resp: requests.Response) -> float | None:
+    """Google's 429/503 error bodies can carry a machine-readable
+    google.rpc.RetryInfo with a retryDelay (e.g. "53s") telling you exactly
+    how long to wait - honor that over guessing with plain backoff when
+    it's present, since (as of writing) even Google's own official SDK
+    doesn't actually parse/use it. Returns None if the body isn't JSON or
+    doesn't carry one, so the caller falls back to exponential backoff."""
+    try:
+        details = resp.json().get("error", {}).get("details", [])
+    except ValueError:
+        return None
+    for d in details:
+        if str(d.get("@type", "")).endswith("RetryInfo"):
+            raw = str(d.get("retryDelay", ""))
+            if raw.endswith("s"):
+                try:
+                    return float(raw[:-1])
+                except ValueError:
+                    pass
+    return None
 
 
 class AiClient:
@@ -45,7 +87,25 @@ class AiClient:
             payload["generationConfig"]["responseSchema"] = response_schema
 
         url = API_URL_TMPL.format(model=self.model)
-        resp = requests.post(url, params={"key": self.api_key}, json=payload, timeout=60)
+
+        attempt = 0
+        while True:
+            resp = requests.post(url, params={"key": self.api_key}, json=payload, timeout=60)
+            if resp.status_code in RETRYABLE_STATUS_CODES and attempt < MAX_RETRIES:
+                delay = _retry_delay_from_response(resp)
+                if delay is None:
+                    delay = BASE_DELAY_SECONDS * (2 ** attempt)
+                delay = min(delay, MAX_DELAY_SECONDS)
+                delay += random.uniform(0, delay * 0.25)  # jitter, avoids lock-step retries
+                attempt += 1
+                log.warning(
+                    "Gemini API returned %d (attempt %d/%d) - retrying in %.1fs",
+                    resp.status_code, attempt, MAX_RETRIES, delay,
+                )
+                time.sleep(delay)
+                continue
+            break
+
         resp.raise_for_status()
         data = resp.json()
         try:

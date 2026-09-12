@@ -17,8 +17,8 @@ from dataclasses import dataclass, field
 from ics_builder import build_google_calendar_link
 
 STYLE = """
-body{font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#1a1a1a;background:#eef0f3;margin:0;padding:24px 12px}
-.wrap{max-width:680px;margin:0 auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+body{font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#1a1a1a;background:#fff;margin:0;padding:0}
+.wrap{width:100%;background:#fff}
 
 .header{background:#111f3d;padding:26px 32px;color:#fff}
 .header .eyebrow{font-size:11px;letter-spacing:.08em;color:#9aa5c0;text-transform:uppercase;font-weight:700}
