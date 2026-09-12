@@ -19,6 +19,28 @@ from settings_store import DEFAULT_DIGEST_FREQUENCY, SettingsStore
 
 log = logging.getLogger(__name__)
 
+# How many days an unread inbox message is protected from labelling/archiving
+# when an account has "hold_unread_emails" turned on (Joe: 'leaves unread
+# emails for a maximum of 7 days before applying a label'). It's still fully
+# processed otherwise - classified, eligible for Good to know/School, and
+# still gets a draft reply if needs_reply - only the label-apply-and-archive
+# step itself is skipped while it's within its grace period.
+HOLD_UNREAD_GRACE_DAYS = 7
+
+
+def _message_age_days(internal_date_ms: int, now: datetime | None = None) -> float:
+    """How many days old a message is, based on Gmail's internalDate (epoch
+    ms). Takes an explicit `now` so this stays deterministically testable
+    without mocking the clock. A missing/zero internal_date_ms (e.g. an old
+    test fake that doesn't set it) is treated as "infinitely old" - i.e. NOT
+    held - so this feature only ever holds messages it can actually confirm
+    are recent, never blocks labelling due to missing data."""
+    if not internal_date_ms:
+        return float("inf")
+    now = now or datetime.now(ZoneInfo("UTC"))
+    received = datetime.fromtimestamp(internal_date_ms / 1000, tz=ZoneInfo("UTC"))
+    return (now - received).total_seconds() / 86400.0
+
 
 def _build_calendar_link(item: dict, ics_store: IcsStore, public_base_url: str) -> str | None:
     """If `item` (an AI-ranked "Good to know"/School entry) describes a
@@ -82,6 +104,11 @@ def run_account(account: dict, bootstrap: BootstrapConfig, settings: dict, ai: A
     # `or DEFAULT_DIGEST_FREQUENCY` is only a defensive fallback for an
     # account record saved by a pre-round-18 version of this app.
     frequency = account.get("digest_frequency") or DEFAULT_DIGEST_FREQUENCY
+    # Joe: 'leave unread emails in inbox for 7 days before labelling ... you
+    # still need to read them to allow them to appear in the good to know
+    # and school sections and make a draft'. Purely per-account, off by
+    # default (see settings_store.add_account).
+    hold_unread_emails = bool(account.get("hold_unread_emails"))
 
     label_map = gmail.list_user_labels(ignore=ignore_labels)
     label_names = list(label_map.keys())
@@ -155,7 +182,40 @@ def run_account(account: dict, bootstrap: BootstrapConfig, settings: dict, ai: A
             })
             continue
 
-        if result["label"] and result["confidence"] >= threshold:
+        is_unread = "UNREAD" in msg.label_ids
+        should_hold = (
+            hold_unread_emails
+            and is_unread
+            and result["label"] and result["confidence"] >= threshold
+            and _message_age_days(msg.internal_date_ms) < HOLD_UNREAD_GRACE_DAYS
+        )
+
+        if should_hold:
+            # Confidently matched a label, but it's still unread and within
+            # its grace period - leave it alone in the inbox (no label, no
+            # archive) even though a match was found. It's already been
+            # fully processed above (all_reviewed / Good to know / School
+            # eligibility, and maybe_flag_needs_reply below still runs), so
+            # nothing about that is skipped - only the label-apply step is.
+            unmatched_items.append({
+                "subject": msg.subject, "sender": msg.sender,
+                "reason": (
+                    f"Unread and within its {HOLD_UNREAD_GRACE_DAYS}-day grace period - "
+                    f"would be labelled \"{result['label']}\" once read or after {HOLD_UNREAD_GRACE_DAYS} days."
+                ),
+                "gmail_link": msg.permalink(),
+            })
+            try:
+                # Defensive only: nothing in this run should have marked the
+                # message read (get_message is a plain GET, and the label
+                # apply step that would remove UNREAD's sibling INBOX is
+                # exactly the step being skipped) - but if anything ever
+                # changes that, this guarantees the message stays/becomes
+                # unread again rather than silently losing that status.
+                gmail.mark_unread(msg.id)
+            except Exception:
+                log.exception("%s: failed to re-mark %s as unread", address, msg_id)
+        elif result["label"] and result["confidence"] >= threshold:
             try:
                 gmail.apply_label_and_archive(msg.id, label_map[result["label"]])
                 sorted_items.append({

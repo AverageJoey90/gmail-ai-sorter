@@ -118,6 +118,12 @@ class SettingsStore:
                 "run_at_local_time": DEFAULT_RUN_AT_LOCAL_TIME,
                 "digest_frequency": DEFAULT_DIGEST_FREQUENCY,
                 "digest_weekday": DEFAULT_DIGEST_WEEKDAY,
+                # Joe: 'leave unread emails in inbox for 7 days before
+                # labelling ... you still need to read them to allow them to
+                # appear in the good to know and school sections and make a
+                # draft'. Off by default so behaviour is unchanged unless a
+                # user opts in on that account's card.
+                "hold_unread_emails": False,
                 "connected_at": datetime.now(timezone.utc).isoformat(),
                 "last_run": None,
             })

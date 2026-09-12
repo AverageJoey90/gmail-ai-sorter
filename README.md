@@ -73,6 +73,25 @@ reminder feature, not part of the sort/triage sweep, so its own lookback
 window (`school_lookback_days` in Settings) stays whatever you've set it
 to regardless of daily/weekly or which day is chosen.
 
+### Leave unread emails in the inbox for 7 days before labelling
+
+Each account's card has a **"Leave unread emails in inbox for 7 days before
+labelling"** checkbox (off by default, so nothing changes unless you turn it
+on). When it's ticked, an inbox email that's still **unread** and **less
+than 7 days old** is left alone in the inbox - not labelled, not
+archived - even if the AI confidently matched it to one of your labels. It's
+still fully processed everywhere else: it counts toward "reviewed", it's
+still eligible for the "Good to know"/"School" digest sections, and if it
+needs a reply it still gets a draft written for you, with a link in the
+"Needs a reply" section as normal. Once you actually read it (or 7 days pass,
+whichever comes first) it gets labelled and archived on the next run like
+any other email. If anything in that processing were ever to mark it read
+along the way, it's defensively re-marked unread afterwards, so this setting
+never changes what you see as read/unread in your inbox - only whether a
+label gets applied yet. A held email shows up in the "Inbox — no good label
+match" section with a note explaining it's just waiting out its grace
+period, not that no label was found for it.
+
 ### Add to Calendar links (iPhone-friendly)
 
 Any event the AI finds - in "Good to know" or "School" - gets an "Add to
@@ -98,13 +117,14 @@ automatically after that.
 - **Run now** - trigger an immediate sort+digest for one account or all of
   them, without waiting for the schedule.
 - **Per-account settings, one Save button** - each Gmail account's own
-  card has its digest recipient, run time, daily/weekly frequency, and
-  (only shown once you pick Weekly) which day of the week it fires on, all
-  in one form with a single Save button at the bottom. No global schedule
-  to keep in sync - just set each account the way you want it. The button
-  reads "Saved" in green until you change something on that card, then
-  turns orange as a reminder there are unsaved changes - press it again to
-  save and it goes back to green.
+  card has its digest recipient, run time, daily/weekly frequency, (only
+  shown once you pick Weekly) which day of the week it fires on, and the
+  "leave unread emails for 7 days" checkbox (see above), all in one form
+  with a single Save button at the bottom. No global schedule to keep in
+  sync - just set each account the way you want it. The button reads
+  "Saved" in green until you change something on that card, then turns
+  orange as a reminder there are unsaved changes - press it again to save
+  and it goes back to green.
 - **Settings** - label-match confidence threshold, a list of
   labels the AI should never sort into, a list of keywords that route a
   label to its own

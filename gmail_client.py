@@ -50,6 +50,13 @@ class EmailMessage:
     snippet: str
     body_text: str
     label_ids: list[str] = field(default_factory=list)
+    # Epoch milliseconds Gmail actually received the message (its API
+    # `internalDate` field, always present regardless of the `format`
+    # requested) - used by pipeline.py's "hold unread mail" feature to work
+    # out how many days old an unread inbox message is. Defaults to 0
+    # (treated as "unknown age" by callers) so this stays optional for any
+    # test/fake message that doesn't care about it.
+    internal_date_ms: int = 0
 
     def permalink(self, account_index: int = 0) -> str:
         # Gmail's web UI accepts the API's message id directly as the
@@ -150,6 +157,10 @@ class GmailClient:
         data = self._get(f"/messages/{message_id}", params={"format": "full"})
         headers = {h["name"].lower(): h["value"] for h in data["payload"].get("headers", [])}
         body = self._extract_body(data["payload"])
+        try:
+            internal_date_ms = int(data.get("internalDate", 0) or 0)
+        except (TypeError, ValueError):
+            internal_date_ms = 0
         return EmailMessage(
             id=data["id"],
             thread_id=data["threadId"],
@@ -158,6 +169,7 @@ class GmailClient:
             snippet=data.get("snippet", ""),
             body_text=body,
             label_ids=data.get("labelIds", []),
+            internal_date_ms=internal_date_ms,
         )
 
     def _extract_body(self, payload: dict, _depth: int = 0) -> str:
@@ -200,6 +212,14 @@ class GmailClient:
 
     def mark_read(self, message_id: str) -> None:
         self._post(f"/messages/{message_id}/modify", {"removeLabelIds": ["UNREAD"]})
+
+    def mark_unread(self, message_id: str) -> None:
+        """Re-adds UNREAD - used to restore a message's unread status after
+        it's been fully processed (classified, considered for the digest,
+        possibly drafted a reply for) but held back from labelling/archiving
+        by the per-account 'hold unread emails' grace period, so the user
+        still sees it as unread in their inbox until they actually open it."""
+        self._post(f"/messages/{message_id}/modify", {"addLabelIds": ["UNREAD"]})
 
     # ---- drafts -----------------------------------------------------------
     def has_existing_draft_for_thread(self, thread_id: str) -> str | None:

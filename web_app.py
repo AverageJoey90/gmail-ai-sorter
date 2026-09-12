@@ -244,6 +244,7 @@ def create_app(bootstrap_store: BootstrapStore, store: SettingsStore) -> Flask:
             frequency_val = a.get("digest_frequency") or DEFAULT_DIGEST_FREQUENCY
             weekday_val = a.get("digest_weekday") or DEFAULT_DIGEST_WEEKDAY
             weekday_wrap_id = f"weekday-wrap-{a['index']}"
+            hold_unread_checked = "checked" if a.get("hold_unread_emails") else ""
 
             account_cards.append(f"""
             <div class="card">
@@ -285,6 +286,17 @@ def create_app(bootstrap_store: BootstrapStore, store: SettingsStore) -> Flask:
                     {_weekday_options(weekday_val)}
                   </select>
                 </div>
+                <div class="field">
+                  <label style="display:flex;align-items:center;gap:8px;font-weight:normal">
+                    <input type="checkbox" name="hold_unread_emails" value="1" {hold_unread_checked} style="width:auto">
+                    Leave unread emails in inbox for {pipeline.HOLD_UNREAD_GRACE_DAYS} days before labelling
+                  </label>
+                  <div class="muted" style="margin-top:4px">
+                    While checked, an unread inbox email won't be labelled/archived until it's read or
+                    {pipeline.HOLD_UNREAD_GRACE_DAYS} days old, whichever comes first. It's still fully reviewed either
+                    way - it can still appear in Good to know/School and still gets a draft reply if it needs one.
+                  </div>
+                </div>
                 <button type="submit" class="save-btn saved">Saved</button>
               </form>
             </div>""")
@@ -310,6 +322,11 @@ def create_app(bootstrap_store: BootstrapStore, store: SettingsStore) -> Flask:
             <label for="threshold">Label-match confidence threshold (0-1)</label>
             <input type="number" id="threshold" name="classify_confidence_threshold" step="0.05" min="0" max="1"
                    value="{settings['classify_confidence_threshold']}">
+            <div class="muted">How sure the AI has to be before it actually applies a label - e.g. 0.7 means it
+              only sorts an email automatically once it's at least 70% confident which label fits. Anything below
+              this is left in the inbox instead (shown in "Inbox - no good label match") rather than risking a
+              wrong label. Raise it for fewer, more confident sorts (more left in the inbox for you to check);
+              lower it to let more borderline guesses through automatically.</div>
           </div>
           <div class="field">
             <label for="ignore">Labels to never sort into (comma-separated)</label>
@@ -406,12 +423,17 @@ def create_app(bootstrap_store: BootstrapStore, store: SettingsStore) -> Flask:
         if weekday not in WEEKDAY_NAMES:
             return redirect(url_for("dashboard", flash="Weekly run day must be a real day of the week - nothing saved."))
 
+        # A checkbox only appears in form data at all when it's ticked, so
+        # its presence/absence in request.form (not its value) is the signal.
+        hold_unread_emails = "hold_unread_emails" in request.form
+
         store.update_account(
             index,
             digest_recipient=recipient,
             run_at_local_time=run_at,
             digest_frequency=frequency,
             digest_weekday=weekday,
+            hold_unread_emails=hold_unread_emails,
         )
         return redirect(url_for("dashboard", flash="Account settings saved."))
 
