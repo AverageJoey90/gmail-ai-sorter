@@ -35,7 +35,19 @@ def run_account(account: dict, bootstrap: BootstrapConfig, settings: dict, ai: A
     # Labels that get their own dedicated "School" digest section instead of
     # competing for a slot in the general "Good to know" ranking - see the
     # independent School-section step further down. Case-insensitive.
-    school_labels = {s.strip().lower() for s in settings.get("school_section_labels", []) if s.strip()}
+    #
+    # Deliberately SUBSTRING matching, not exact-name matching: Gmail returns
+    # nested labels as their full path (e.g. "Family/School"), and people
+    # often word a label as "School - Yeomoor Wood" or similar rather than
+    # a bare "School" - none of those equal "school" outright, but all of
+    # them contain it. So each configured keyword (default just "school")
+    # is checked as a substring of the label's full lowercased name/path,
+    # anywhere in it, rather than requiring the whole name to match.
+    school_keywords = [s.strip().lower() for s in settings.get("school_section_labels", []) if s.strip()]
+
+    def _is_school_label(name: str) -> bool:
+        lowered = name.strip().lower()
+        return any(kw in lowered for kw in school_keywords)
     # "daily" (the global default, or this account's own override) means the
     # labelled-folder sweep below only looks at unread mail, same as always;
     # "weekly" broadens that to everything from the last 7 days regardless
@@ -48,8 +60,8 @@ def run_account(account: dict, bootstrap: BootstrapConfig, settings: dict, ai: A
     # Resolved once so every classified/found message can be cheaply checked
     # against it, and so the School-section step below knows which actual
     # label names in this account it should search.
-    school_label_ids = {label_map[name] for name in label_names if name.strip().lower() in school_labels}
-    school_label_names = [name for name in label_names if name.strip().lower() in school_labels]
+    school_label_ids = {label_map[name] for name in label_names if _is_school_label(name)}
+    school_label_names = [name for name in label_names if _is_school_label(name)]
 
     needs_reply_items: list[dict] = []
     sorted_items: list[dict] = []
@@ -121,7 +133,7 @@ def run_account(account: dict, bootstrap: BootstrapConfig, settings: dict, ai: A
                     "subject": msg.subject, "sender": msg.sender,
                     "label": result["label"], "gmail_link": msg.permalink(),
                 })
-                if result["label"].strip().lower() in school_labels:
+                if _is_school_label(result["label"]):
                     # Now actually carries the School label (just applied
                     # above) - the dedicated School section's own search
                     # will find it, so keep it out of Good to know too.
@@ -156,7 +168,7 @@ def run_account(account: dict, bootstrap: BootstrapConfig, settings: dict, ai: A
             log.exception("%s: failed searching label %s, skipping", address, name)
             continue
         folder_ids.update(ids)
-        if name.strip().lower() in school_labels:
+        if _is_school_label(name):
             school_folder_ids.update(ids)
 
     log.info("%s: %d messages found across %d labelled folders (%s)", address, len(folder_ids), len(label_names), folder_query_suffix)

@@ -35,9 +35,14 @@ NAS, no `.env` file to hunt for.
    twice) and summarises them. If one describes a dated event, the digest
    includes an "Add to Calendar" link that opens Google Calendar with the
    event pre-filled, one click from saved.
-5. Separately, runs its own recent-window search of whichever label(s) you
-   configure as "School" and picks the top 3 from those, same
-   summary/event/calendar-link treatment as above - so school mail always
+5. Separately, runs its own recent-window search of any label whose name
+   *contains* one of your configured School keywords (default just
+   `school`, matched case-insensitively anywhere in the label's full
+   name/path - so a nested label like `Family/School` or a differently
+   worded one like `School - Yeomoor Wood` is picked up automatically,
+   not just a label named exactly "School") and picks the top 3 from
+   those, same summary/event/calendar-link treatment as above - so school
+   mail always
    gets its own spotlight rather than competing for a slot in step 4's
    general importance ranking. This is a "what's coming up" reminder, not
    part of the sort/triage above - the messages it surfaces aren't marked
@@ -74,11 +79,14 @@ in Settings) stays whatever you've set it to regardless of daily/weekly.
   them, without waiting for the schedule.
 - **Settings** - run time, run frequency (daily/weekly, each overridable
   per account), label-match confidence threshold, a list of labels the AI
-  should never sort into, a list of labels that get their own dedicated
-  "School" digest section (defaults to `School` - add more label names,
-  comma-separated, for anything else that should get the same own-section
-  treatment rather than competing in the general "Good to know" ranking),
-  and how many days back the School section itself checks (default 14 -
+  should never sort into, a list of keywords that route a label to its own
+  dedicated "School" digest section (defaults to `School`, matched as a
+  substring anywhere in a label's full name/path - so it also catches a
+  nested label or a differently-worded one, not just a label named
+  exactly "School" - add more keywords, comma-separated, for anything else
+  that should get the same own-section treatment rather than competing in
+  the general "Good to know" ranking), and how many days back the School
+  section itself checks (default 14 -
   set it to whatever window makes sense as a reminder, e.g. 21 for three
   weeks, independent of the daily/weekly run frequency above).
 - **Last run status** per account (counts, or an error if something went

@@ -295,8 +295,9 @@ def create_app(bootstrap_store: BootstrapStore, store: SettingsStore) -> Flask:
             <input type="text" id="ignore" name="ignore_labels" value="{_esc(', '.join(settings['ignore_labels']))}">
           </div>
           <div class="field">
-            <label for="school_labels">Labels that get their own "School" digest section (comma-separated)</label>
+            <label for="school_labels">Keywords that route a label to the "School" digest section (comma-separated)</label>
             <input type="text" id="school_labels" name="school_section_labels" value="{_esc(', '.join(settings['school_section_labels']))}">
+            <div class="muted">Matches anywhere in a label's full name/path, case-insensitive - "school" also catches a nested label like "Family/School" or a differently-worded one like "School - Yeomoor Wood", not just a label named exactly "School".</div>
           </div>
           <div class="field">
             <label for="school_lookback_days">School section lookback (days)</label>
