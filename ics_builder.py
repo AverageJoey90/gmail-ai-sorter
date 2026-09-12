@@ -55,6 +55,14 @@ def build_ics(title: str, start_iso: str, end_iso: str = "", location: str = "",
         "VERSION:2.0",
         "PRODID:-//gmail-ai-sorter//EN",
         "CALSCALE:GREGORIAN",
+        # Without an explicit METHOD, some calendar apps (notably iOS) treat
+        # a bare .ics resource as ambiguous and offer to "Subscribe" to it as
+        # a live, ongoing feed rather than import it as a one-off event.
+        # METHOD:PUBLISH is the RFC 5545 way of saying "this is a single
+        # snapshot of an event, add it" - it's what actually produces the
+        # native one-time "Add to Calendar"/"Add Event" sheet instead of a
+        # subscription prompt.
+        "METHOD:PUBLISH",
         "BEGIN:VEVENT",
         f"UID:{uid}",
         f"DTSTAMP:{now}",

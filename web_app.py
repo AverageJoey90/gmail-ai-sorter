@@ -488,7 +488,16 @@ def create_app(bootstrap_store: BootstrapStore, store: SettingsStore) -> Flask:
         data = ics_store.read_event(token)
         if data is None:
             return ("This calendar link has expired or wasn't found.", 404)
-        return Response(data, mimetype="text/calendar")
+        # Content-Disposition: attachment - without this, some browsers
+        # (notably mobile Safari) render an .ics resource fetched inline as
+        # if it were a live calendar feed to "Subscribe" to, rather than
+        # downloading it as a one-off file to import. Combined with the
+        # METHOD:PUBLISH property in the .ics content itself (ics_builder.py),
+        # this is what makes tapping the link produce a native one-time
+        # "Add Event"/"Add to Calendar" prompt instead of a subscribe prompt.
+        response = Response(data, mimetype="text/calendar")
+        response.headers["Content-Disposition"] = 'attachment; filename="event.ics"'
+        return response
 
     # ---- OAuth connect flow -----------------------------------------------------------
     @app.get("/oauth/start")

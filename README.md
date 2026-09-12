@@ -108,7 +108,10 @@ anything else) - anyone who has that exact link can see that one event's
 title/time/location, which is the same practical exposure as the old
 Google Calendar link already had (it put those same details directly in
 a public URL). Event files are kept for 90 days and cleaned up
-automatically after that.
+automatically after that. The .ics file itself is marked `METHOD:PUBLISH`
+and served with a `Content-Disposition: attachment` header, specifically so
+tapping the link produces a one-off "Add Event" prompt rather than an
+ongoing calendar "Subscribe" prompt.
 
 ## The dashboard (port 4568)
 
