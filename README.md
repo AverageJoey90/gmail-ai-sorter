@@ -17,25 +17,46 @@ too - either way, once they're in place you open the dashboard and click
 "Connect a Gmail account". No scripts to run, no files to copy onto the
 NAS, no `.env` file to hunt for.
 
-## What it does, once a day, per connected Gmail account
+## What it does, once a day (or once a week - see below), per connected Gmail account
 
 1. Looks at everything currently in the inbox and asks Gemini to match
    each email to one of the labels **already in your account** (it never
    creates new labels). Confident matches get that label applied and are
    archived out of the inbox. Low-confidence ones are left in the inbox.
-2. Sweeps every other label ("folder") for unread mail, reads it, and
-   marks it read.
+2. Sweeps every other label ("folder") for new mail - unread mail only if
+   this account runs daily, or everything from the last 7 days regardless
+   of read state if it runs weekly (see "Daily vs. weekly" below) - reads
+   it, and marks it read.
 3. Flags anything that needs a personal reply. For each one, it checks
    Gmail for an existing draft on that thread first (never creates a
    duplicate); if none exists, it drafts a reply for you.
-4. Picks the 5 most important emails from everything reviewed and
-   summarises them. If one describes a dated event, the digest includes
-   an "Add to Calendar" link that opens Google Calendar with the event
-   pre-filled, one click from saved.
-5. Emails you (or whoever you set as the recipient) one HTML digest with:
+4. Picks the 5 most important emails from everything reviewed (excluding
+   anything that went to the School section below, so nothing shows up
+   twice) and summarises them. If one describes a dated event, the digest
+   includes an "Add to Calendar" link that opens Google Calendar with the
+   event pre-filled, one click from saved.
+5. Separately, runs its own recent-window search of whichever label(s) you
+   configure as "School" and picks the top 3 from those, same
+   summary/event/calendar-link treatment as above - so school mail always
+   gets its own spotlight rather than competing for a slot in step 4's
+   general importance ranking.
+6. Emails you (or whoever you set as the recipient) one HTML digest with:
    boxed counts up top, **Needs a reply** (with draft links), **Good to
-   know** (top 5 + calendar links), **Sorted**, and **Inbox — no good
-   label match**.
+   know** (top 5 + calendar links), **School** (top 3 + calendar links),
+   **Sorted**, and **Inbox — no good label match**.
+
+### Daily vs. weekly
+
+Each account defaults to a **daily** run, but can be set to **weekly**
+instead - either globally (Settings) or per-account (overriding the
+global default, same pattern as the per-account run time). A weekly
+account is still checked at its usual daily run-time each day, but only
+actually fires once about 7 days have passed since its last run - no
+separate day-of-week setting to configure. When it does fire, its
+labelled-folder sweep (step 2 above) and its School-section search (step
+5) both look at a full week/day-appropriate window of mail regardless of
+read state, rather than only what's unread, since a weekly account isn't
+checked in between runs.
 
 ## The dashboard (port 4568)
 
@@ -44,13 +65,13 @@ NAS, no `.env` file to hunt for.
 - **Per-account digest recipient**, editable any time.
 - **Run now** - trigger an immediate sort+digest for one account or all of
   them, without waiting for the schedule.
-- **Settings** - daily run time, label-match confidence threshold, a
-  list of labels the AI should never sort into, and a list of labels that
-  should always show up in the digest's "Good to know" section regardless
-  of what the AI's importance ranking decides (defaults to `School`, so
-  school emails never get missed just because the AI judged something else
-  more important that day - add more label names, comma-separated, for
-  anything else you never want to risk missing).
+- **Settings** - run time, run frequency (daily/weekly, each overridable
+  per account), label-match confidence threshold, a list of labels the AI
+  should never sort into, and a list of labels that get their own
+  dedicated "School" digest section (defaults to `School` - add more label
+  names, comma-separated, for anything else that should get the same
+  own-section treatment rather than competing in the general "Good to
+  know" ranking).
 - **Last run status** per account (counts, or an error if something went
   wrong).
 
@@ -444,10 +465,10 @@ with no terminal involved.
    approve access. You're bounced back to the dashboard showing it
    connected. Repeat for the second account (sign out of Google or use an
    incognito window so the picker offers the other account).
-3. Adjust **Settings** if you want (run time, confidence threshold,
-   ignore list, always-important labels), and set each account's digest
-   recipient if you want the digest to land somewhere other than the
-   account's own inbox.
+3. Adjust **Settings** if you want (run time, daily/weekly frequency,
+   confidence threshold, ignore list, School-section labels), and set each
+   account's digest recipient if you want the digest to land somewhere
+   other than the account's own inbox.
 4. Click **Run now** on an account rather than waiting for the schedule,
    then refresh in a minute or two. Check: did the digest email arrive?
    Did a couple of inbox emails get labelled and archived? Does a "Needs

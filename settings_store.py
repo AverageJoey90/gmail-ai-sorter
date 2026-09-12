@@ -19,13 +19,21 @@ DEFAULTS: dict[str, Any] = {
     "timezone": "Europe/London",
     "ignore_labels": [],
     "classify_confidence_threshold": 0.7,
-    # Any email classified (or already filed) under one of these labels
-    # always appears in the digest's "Good to know" section, regardless of
-    # what the AI's top-5 importance ranking decides - e.g. school emails
-    # you never want to risk missing. Case-insensitive match against the
-    # label name. Defaults to "School" since that's the common case, but
-    # editable from the dashboard without a redeploy.
-    "always_important_labels": ["School"],
+    # Labels that get their own dedicated "School" section in the digest
+    # (top 3, AI-ranked, own recent-window search - see pipeline.py) instead
+    # of competing for a slot in the general "Good to know" ranking.
+    # Case-insensitive match against the label name. Defaults to "School"
+    # since that's the common case, but editable from the dashboard without
+    # a redeploy, and more than one label name can be listed.
+    "school_section_labels": ["School"],
+    # "daily" (default) or "weekly" - how often the sort+digest run fires.
+    # Can be overridden per-account (see add_account below); an account
+    # left at None uses this global default. Weekly accounts still get
+    # checked at their usual daily run-time, but only actually fire once
+    # ~7 days have passed since their last run (see main.py's _is_due) -
+    # and their labelled-folder sweep looks at everything from the last 7
+    # days rather than only unread mail (see pipeline.py).
+    "digest_frequency": "daily",
 }
 
 
@@ -70,6 +78,7 @@ class SettingsStore:
                 "address": address,
                 "digest_recipient": address,
                 "run_at_local_time": None,  # None = use the global default run_at_local_time setting
+                "digest_frequency": None,  # None = use the global default digest_frequency setting
                 "connected_at": datetime.now(timezone.utc).isoformat(),
                 "last_run": None,
             })

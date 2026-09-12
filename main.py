@@ -1,12 +1,15 @@
 """Entry point. Starts four things in one process:
 
-1. A background daemon thread running the daily scheduler - checks every
-   60s whether it's time for each connected account's own run time (an
+1. A background daemon thread running the scheduler - checks every 60s
+   whether it's time for each connected account's own run time (an
    optional per-account override, falling back to the global
-   RUN_AT_LOCAL_TIME default) and, if so, runs that account's sort+digest
-   pipeline once. Two accounts can therefore fire at different times of
-   day, each independently tracked so a later-in-the-day account isn't
-   skipped just because an earlier one already ran today.
+   RUN_AT_LOCAL_TIME default) and, if so, whether it's actually due given
+   its frequency (daily, or weekly - also an optional per-account
+   override; a weekly account is checked at the same time of day but only
+   fires once ~7 days have passed since its last run - see `_is_due`), and
+   if so runs that account's sort+digest pipeline once. Accounts are
+   tracked independently, so different run times/frequencies per account
+   all work at once.
 2. A background daemon thread supervising an optional Cloudflare Tunnel
    subprocess (see tunnel_manager.py) - reacts within seconds to a tunnel
    token being entered, changed, or cleared on the dashboard's Setup page.
@@ -64,6 +67,20 @@ def _parse_hh_mm(value: str, fallback: str) -> tuple[int, int]:
         return int(hh), int(mm)
 
 
+def _is_due(frequency: str, days_since: int | None) -> bool:
+    """Given that it's already this account's scheduled time-of-day (an
+    hour/minute match was just checked by the caller), decides whether it
+    should actually fire today. `days_since` is how long ago it last ran
+    (None = never run before). Daily accounts are due unless they already
+    ran today (days_since == 0, e.g. a container restart mid-day re-checked
+    the same minute). Weekly accounts are checked at their usual daily
+    time-of-day too - there's no separate day-of-week setting - but only
+    actually fire once ~7 days have passed since their last run."""
+    if frequency == "weekly":
+        return days_since is None or days_since >= 7
+    return days_since != 0
+
+
 def scheduler_loop(bootstrap_store: BootstrapStore, store: SettingsStore) -> None:
     state = StateStore(bootstrap_store.data_dir)
     log.info("Scheduler thread started")
@@ -86,13 +103,19 @@ def scheduler_loop(bootstrap_store: BootstrapStore, store: SettingsStore) -> Non
             # one - so two accounts on different schedules are each checked
             # and marked as run independently, rather than one shared
             # HH:MM triggering every account at once.
+            default_frequency = settings.get("digest_frequency", "daily")
             for account in store.list_accounts():
                 hh, mm = _parse_hh_mm(account.get("run_at_local_time") or "", default_run_at)
                 if now.hour != hh or now.minute != mm:
                     continue
-                if state.last_run_date(account["address"]) == today_str:
+                frequency = account.get("digest_frequency") or default_frequency
+                days_since = state.days_since_last_run(account["address"], now.date())
+                if not _is_due(frequency, days_since):
                     continue
-                log.info("Scheduled run starting for %s (run time %02d:%02d)", account["address"], hh, mm)
+                log.info(
+                    "Scheduled run starting for %s (run time %02d:%02d, %s)",
+                    account["address"], hh, mm, frequency,
+                )
                 ai = AiClient(bootstrap.gemini_api_key, bootstrap.gemini_model)
                 try:
                     summary = pipeline.run_account(account, bootstrap, settings, ai)

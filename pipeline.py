@@ -32,41 +32,55 @@ def run_account(account: dict, bootstrap: BootstrapConfig, settings: dict, ai: A
     ignore_labels = set(settings.get("ignore_labels", []))
     threshold = float(settings.get("classify_confidence_threshold", 0.7))
     tz = settings.get("timezone", "Europe/London")
-    # Anything classified into (or already filed under) one of these labels
-    # always makes it into the digest's "Good to know" section, regardless
-    # of the AI's top-5 importance ranking - e.g. school emails, so they're
-    # never at the mercy of the ranking call judging them less important
-    # than something else that happened that day.
-    always_important_labels = {s.strip().lower() for s in settings.get("always_important_labels", []) if s.strip()}
+    # Labels that get their own dedicated "School" digest section instead of
+    # competing for a slot in the general "Good to know" ranking - see the
+    # independent School-section step further down. Case-insensitive.
+    school_labels = {s.strip().lower() for s in settings.get("school_section_labels", []) if s.strip()}
+    # "daily" (the global default, or this account's own override) means the
+    # labelled-folder sweep below only looks at unread mail, same as always;
+    # "weekly" broadens that to everything from the last 7 days regardless
+    # of read state, since a weekly account isn't checked in between.
+    frequency = account.get("digest_frequency") or settings.get("digest_frequency", "daily")
 
     label_map = gmail.list_user_labels(ignore=ignore_labels)
     label_names = list(label_map.keys())
     log.info("%s: %d existing labels available to sort into", address, len(label_names))
+    # Resolved once so every classified/found message can be cheaply checked
+    # against it, and so the School-section step below knows which actual
+    # label names in this account it should search.
+    school_label_ids = {label_map[name] for name in label_names if name.strip().lower() in school_labels}
+    school_label_names = [name for name in label_names if name.strip().lower() in school_labels]
 
     needs_reply_items: list[dict] = []
     sorted_items: list[dict] = []
     unmatched_items: list[dict] = []
-    priority_items: list[dict] = []  # always-important-label matches, force-merged into "Good to know" below
-    all_reviewed: dict[str, dict] = {}  # ref -> {subject, sender, body}
+    all_reviewed: dict[str, dict] = {}  # ref -> {subject, sender, body, gmail_link, exclude_from_good_to_know}
 
     def maybe_flag_needs_reply(msg, ai_result: dict) -> None:
         if not ai_result.get("needs_reply"):
             return
         draft_link = None
+        reply_gist = ""
         existing = gmail.has_existing_draft_for_thread(msg.thread_id)
         if existing:
             draft_link = GmailClient.draft_permalink(existing)
+            # No fresh draft_reply call was made (and none needed - a draft
+            # already exists), so there's no generated gist to show; say so
+            # plainly rather than guessing at what an existing draft says.
+            reply_gist = "A draft reply already exists on this thread - open it in Gmail to review."
         else:
             try:
-                reply_text = ai.draft_reply(msg.subject, msg.sender, msg.body_text)
-                draft_msg_id = gmail.create_draft_reply(msg, reply_text, address)
+                drafted = ai.draft_reply(msg.subject, msg.sender, msg.body_text)
+                draft_msg_id = gmail.create_draft_reply(msg, drafted["reply_body"], address)
                 draft_link = GmailClient.draft_permalink(draft_msg_id)
+                reply_gist = drafted.get("reply_gist", "")
             except Exception:
                 log.exception("%s: failed to create draft for message %s", address, msg.id)
         needs_reply_items.append({
             "subject": msg.subject,
             "sender": msg.sender,
-            "summary": ai_result.get("reasoning") or msg.snippet,
+            "summary": ai_result.get("summary") or msg.snippet,
+            "reply_gist": reply_gist,
             "draft_link": draft_link,
         })
 
@@ -80,9 +94,14 @@ def run_account(account: dict, bootstrap: BootstrapConfig, settings: dict, ai: A
             log.exception("%s: failed to fetch inbox message %s, skipping", address, msg_id)
             continue
 
-        all_reviewed[f"inbox_{msg.id}"] = {
-            "ref": f"inbox_{msg.id}", "subject": msg.subject, "sender": msg.sender,
+        ref = f"inbox_{msg.id}"
+        all_reviewed[ref] = {
+            "ref": ref, "subject": msg.subject, "sender": msg.sender,
             "body": msg.body_text, "gmail_link": msg.permalink(),
+            # A brand-new inbox message can't already carry a School label,
+            # but check anyway for consistency with the folder-sweep loop;
+            # updated below if it gets confidently labeled School this run.
+            "exclude_from_good_to_know": bool(set(msg.label_ids) & school_label_ids),
         }
 
         try:
@@ -95,15 +114,6 @@ def run_account(account: dict, bootstrap: BootstrapConfig, settings: dict, ai: A
             })
             continue
 
-        if always_important_labels and result.get("label") and result["label"].strip().lower() in always_important_labels:
-            priority_items.append({
-                "subject": msg.subject,
-                "sender": msg.sender,
-                "summary": result.get("reasoning") or msg.snippet,
-                "gmail_link": msg.permalink(),
-                "is_event": False,
-            })
-
         if result["label"] and result["confidence"] >= threshold:
             try:
                 gmail.apply_label_and_archive(msg.id, label_map[result["label"]])
@@ -111,6 +121,11 @@ def run_account(account: dict, bootstrap: BootstrapConfig, settings: dict, ai: A
                     "subject": msg.subject, "sender": msg.sender,
                     "label": result["label"], "gmail_link": msg.permalink(),
                 })
+                if result["label"].strip().lower() in school_labels:
+                    # Now actually carries the School label (just applied
+                    # above) - the dedicated School section's own search
+                    # will find it, so keep it out of Good to know too.
+                    all_reviewed[ref]["exclude_from_good_to_know"] = True
             except Exception:
                 log.exception("%s: failed to apply label to %s", address, msg_id)
                 unmatched_items.append({
@@ -126,21 +141,26 @@ def run_account(account: dict, bootstrap: BootstrapConfig, settings: dict, ai: A
 
         maybe_flag_needs_reply(msg, result)
 
-    # ---- 2. Sweep other labelled folders for unread mail -----------------------------------------------------------
-    folder_unread_ids: set[str] = set()
-    priority_folder_ids: set[str] = set()  # unread ids that live under an always-important label (e.g. "School")
+    # ---- 2. Sweep other labelled folders for new mail -----------------------------------------------------------
+    # Daily accounts only need unread mail here (this same folder was fully
+    # swept as of the last run); weekly accounts aren't checked in between,
+    # so they look at everything from the last 7 days regardless of
+    # read/unread state, per Joe's explicit requirement for weekly mode.
+    folder_query_suffix = "newer_than:7d" if frequency == "weekly" else "is:unread"
+    folder_ids: set[str] = set()
+    school_folder_ids: set[str] = set()  # ids found specifically via a School label, excluded from Good to know
     for name in label_names:
         try:
-            ids = gmail.search_message_ids(f'label:"{name}" is:unread', max_results=100)
+            ids = gmail.search_message_ids(f'label:"{name}" {folder_query_suffix}', max_results=100)
         except Exception:
             log.exception("%s: failed searching label %s, skipping", address, name)
             continue
-        folder_unread_ids.update(ids)
-        if always_important_labels and name.strip().lower() in always_important_labels:
-            priority_folder_ids.update(ids)
+        folder_ids.update(ids)
+        if name.strip().lower() in school_labels:
+            school_folder_ids.update(ids)
 
-    log.info("%s: %d unread messages found across %d labelled folders", address, len(folder_unread_ids), len(label_names))
-    for msg_id in folder_unread_ids:
+    log.info("%s: %d messages found across %d labelled folders (%s)", address, len(folder_ids), len(label_names), folder_query_suffix)
+    for msg_id in folder_ids:
         try:
             msg = gmail.get_message(msg_id)
             gmail.mark_read(msg_id)
@@ -148,19 +168,12 @@ def run_account(account: dict, bootstrap: BootstrapConfig, settings: dict, ai: A
             log.exception("%s: failed processing folder message %s, skipping", address, msg_id)
             continue
 
-        all_reviewed[f"folder_{msg.id}"] = {
-            "ref": f"folder_{msg.id}", "subject": msg.subject, "sender": msg.sender,
+        ref = f"folder_{msg.id}"
+        all_reviewed[ref] = {
+            "ref": ref, "subject": msg.subject, "sender": msg.sender,
             "body": msg.body_text, "gmail_link": msg.permalink(),
+            "exclude_from_good_to_know": msg_id in school_folder_ids or bool(set(msg.label_ids) & school_label_ids),
         }
-
-        if msg_id in priority_folder_ids:
-            priority_items.append({
-                "subject": msg.subject,
-                "sender": msg.sender,
-                "summary": msg.snippet,
-                "gmail_link": msg.permalink(),
-                "is_event": False,
-            })
 
         try:
             result = ai.classify_email(msg.subject, msg.sender, msg.body_text, label_names)
@@ -168,11 +181,16 @@ def run_account(account: dict, bootstrap: BootstrapConfig, settings: dict, ai: A
         except Exception:
             log.exception("%s: needs-reply check failed for folder message %s", address, msg_id)
 
-    # ---- 3. Top 5 important + event detection -----------------------------------------------------------
+    # ---- 3. Top 5 important + event detection ("Good to know") -----------------------------------------------------------
+    # School-section candidates are left out of this ranking pool entirely -
+    # they get their own dedicated section below, so there's no duplication
+    # between the two and no risk of the general ranking outranking them
+    # into a worse/duplicate slot.
+    good_to_know_pool = [v for v in all_reviewed.values() if not v.get("exclude_from_good_to_know")]
     top_picks = []
-    if all_reviewed:
+    if good_to_know_pool:
         try:
-            ranked = ai.rank_and_summarize(list(all_reviewed.values()), top_n=5, tz=tz)
+            ranked = ai.rank_and_summarize(good_to_know_pool, top_n=5, tz=tz)
             for r in ranked:
                 base = all_reviewed.get(r["ref"])
                 if not base:
@@ -181,19 +199,67 @@ def run_account(account: dict, bootstrap: BootstrapConfig, settings: dict, ai: A
         except Exception:
             log.exception("%s: importance ranking failed, omitting 'Good to know' section", address)
 
-    # Force-merge always-important-label matches (e.g. School) to the front
-    # of "Good to know", ahead of the AI's own picks - but don't duplicate
-    # one that the ranking already picked up with its own (better) summary.
-    if priority_items:
-        seen = {(p.get("subject"), p.get("sender")) for p in top_picks}
-        priority_only = []
-        for p in priority_items:
-            key = (p.get("subject"), p.get("sender"))
-            if key in seen:
+    # ---- 3b. School section: independent recent-window search, top 3 -----------------------------------------------------------
+    # Deliberately its own search (not just reusing what the sweep above
+    # happened to find) so the School section reflects a proper recent
+    # window even on days nothing new was unread - e.g. a still-unread
+    # week-old school newsletter should still be eligible. Messages fetched
+    # only for this step are NOT added to all_reviewed / marked read /
+    # counted as "reviewed": surfacing something in a digest highlight isn't
+    # the same as having processed it.
+    school_items: list[dict] = []
+    if school_label_names:
+        school_window = "newer_than:7d" if frequency == "weekly" else "newer_than:14d"
+        candidate_ids: list[str] = []
+        seen_ids: set[str] = set()
+        for name in school_label_names:
+            try:
+                ids = gmail.search_message_ids(f'label:"{name}" {school_window}', max_results=15)
+            except Exception:
+                log.exception("%s: failed searching School label %s for the School section", address, name)
                 continue
-            seen.add(key)
-            priority_only.append(p)
-        top_picks = priority_only + top_picks
+            for mid in ids:
+                if mid not in seen_ids:
+                    seen_ids.add(mid)
+                    candidate_ids.append(mid)
+        candidate_ids = candidate_ids[:15]  # bound Gmail fetches + Gemini prompt size
+
+        school_candidates = []
+        school_lookup: dict[str, dict] = {}
+        for mid in candidate_ids:
+            # Reuse data already fetched above (inbox/folder sweep) where
+            # possible, to avoid a redundant Gmail fetch for the same email.
+            reused = all_reviewed.get(f"inbox_{mid}") or all_reviewed.get(f"folder_{mid}")
+            if reused:
+                subject, sender, body, gmail_link = reused["subject"], reused["sender"], reused["body"], reused.get("gmail_link")
+                snippet = body[:200]
+            else:
+                try:
+                    msg = gmail.get_message(mid)
+                except Exception:
+                    log.exception("%s: failed to fetch School candidate %s, skipping", address, mid)
+                    continue
+                subject, sender, body, gmail_link, snippet = msg.subject, msg.sender, msg.body_text, msg.permalink(), msg.snippet
+            ref = f"school_{mid}"
+            school_lookup[ref] = {"subject": subject, "sender": sender, "gmail_link": gmail_link, "snippet": snippet}
+            school_candidates.append({"ref": ref, "subject": subject, "sender": sender, "body": body})
+
+        if school_candidates:
+            try:
+                ranked_school = ai.rank_and_summarize(school_candidates, top_n=3, tz=tz)
+                for r in ranked_school:
+                    base = school_lookup.get(r["ref"])
+                    if not base:
+                        continue
+                    school_items.append({**r, "subject": base["subject"], "sender": base["sender"], "gmail_link": base.get("gmail_link")})
+            except Exception:
+                log.exception("%s: School ranking failed, falling back to the most recent School emails", address)
+                for c in school_candidates[:3]:
+                    base = school_lookup[c["ref"]]
+                    school_items.append({
+                        "subject": base["subject"], "sender": base["sender"], "gmail_link": base.get("gmail_link"),
+                        "summary": base["snippet"], "is_event": False,
+                    })
 
     # ---- 4. Build + send digest -----------------------------------------------------------
     now = datetime.now(ZoneInfo(tz))
@@ -205,6 +271,7 @@ def run_account(account: dict, bootstrap: BootstrapConfig, settings: dict, ai: A
         needs_reply_count=len(needs_reply_items),
         needs_reply_items=needs_reply_items,
         top_important=top_picks,
+        school_items=school_items,
         sorted_items=sorted_items,
         unmatched_items=unmatched_items,
         timezone=tz,

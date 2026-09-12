@@ -6,6 +6,8 @@ project:
   Good to know (top 5 important, with Add to Calendar links for events -
     falls back to a short "what happened" list when nothing was ranked
     important enough to include, so this section is never just empty)
+  School (top 3 from the School label(s), own recent-window search - see
+    pipeline.py; deliberately not duplicated in Good to know)
   Sorted - label applied, archived out of Inbox
   Inbox - no good label match
 """
@@ -50,9 +52,12 @@ h2{font-size:19px;font-weight:800;color:#111f3d;border-bottom:2px solid #111f3d;
 .needs-box{background:#fdf3e0;border-left:4px solid #d99a2b;border-radius:8px;padding:18px 20px;margin-bottom:14px}
 .needs-box .hdr{color:#a9740f;font-weight:800;font-size:12px;letter-spacing:.04em;text-transform:uppercase;margin-bottom:12px}
 .needs-box .subj{font-weight:700;font-size:16px;color:#1a1a1a;margin-bottom:8px}
-.needs-box .summary{font-size:14px;color:#4b5563;line-height:1.55;margin-bottom:14px}
+.needs-box .summary{font-size:14px;color:#4b5563;line-height:1.55;margin-bottom:8px}
+.needs-box .reply-gist{font-size:14px;color:#4b5563;line-height:1.55;margin-bottom:14px}
+.needs-box .reply-gist .label{font-weight:700;color:#a9740f}
 
-.goodbox{background:#f3f4f6;border-radius:8px;padding:14px 18px;margin-bottom:12px}
+.goodbox{background:#eafbf1;border-radius:8px;padding:14px 18px;margin-bottom:12px}
+.goodbox.school{background:#f3edfb}
 .goodbox .gtitle{font-weight:700;font-size:15px;color:#111f3d;margin-bottom:6px}
 .goodbox .gbody{font-size:14px;color:#4b5563;line-height:1.55;margin-bottom:8px}
 
@@ -80,8 +85,9 @@ class DigestData:
     sorted_count: int
     left_in_inbox_count: int
     needs_reply_count: int
-    needs_reply_items: list[dict] = field(default_factory=list)     # {subject, sender, summary, draft_link}
+    needs_reply_items: list[dict] = field(default_factory=list)     # {subject, sender, summary, reply_gist, draft_link}
     top_important: list[dict] = field(default_factory=list)          # {subject, sender, summary, is_event, event_*, gmail_link}
+    school_items: list[dict] = field(default_factory=list)           # {subject, sender, summary, is_event, event_*, gmail_link}
     sorted_items: list[dict] = field(default_factory=list)           # {subject, sender, label, gmail_link}
     unmatched_items: list[dict] = field(default_factory=list)        # {subject, sender, reason, gmail_link}
     timezone: str = "Europe/London"
@@ -127,6 +133,35 @@ def _fallback_good_to_know(d: DigestData, limit: int = 5) -> list[dict]:
     return items[:limit]
 
 
+def _render_items(items: list[dict], tz: str, variant: str = "good") -> str:
+    """Shared renderer for a list of numbered "goodbox" items (used by both
+    "Good to know" and "School") - same summary/Add-to-Calendar/Open-link
+    layout either way, just a different background tint per variant (light
+    green for Good to know, light purple for School) so the two sections
+    stay visually distinct at a glance."""
+    parts = []
+    box_class = "goodbox" if variant == "good" else f"goodbox {variant}"
+    for idx, item in enumerate(items, start=1):
+        parts.append(f'<div class="{box_class}">')
+        parts.append(f'<div class="gtitle">{idx}. {_esc(item["subject"])}</div>')
+        parts.append(f'<div class="gbody">{_esc(item.get("summary", ""))}</div>')
+        if item.get("is_event") and item.get("event_start"):
+            cal_link = build_google_calendar_link(
+                title=item.get("event_title") or item["subject"],
+                start_iso=item["event_start"],
+                end_iso=item.get("event_end", ""),
+                location=item.get("event_location", ""),
+                description=item.get("summary", ""),
+                tz=tz,
+            )
+            if cal_link:
+                parts.append(f'<a class="btn-cal" href="{_esc(cal_link)}">Add to Calendar &rarr;</a>')
+        if item.get("gmail_link"):
+            parts.append(f'<a class="openlink" href="{_esc(item["gmail_link"])}">Open &rarr;</a>')
+        parts.append("</div>")
+    return "".join(parts)
+
+
 def build_digest_html(d: DigestData) -> str:
     parts = [f"<html><head><meta charset='utf-8'><style>{STYLE}</style></head><body><div class='wrap'>"]
 
@@ -151,6 +186,8 @@ def build_digest_html(d: DigestData) -> str:
             parts.append('<div class="needs-box"><div class="hdr">&#9888; Needs a reply</div>')
             parts.append(f'<div class="subj">{_esc(item["subject"])}</div>')
             parts.append(f'<div class="summary">{_esc(item.get("summary", ""))}</div>')
+            if item.get("reply_gist"):
+                parts.append(f'<div class="reply-gist"><span class="label">Draft reply:</span> {_esc(item["reply_gist"])}</div>')
             if item.get("draft_link"):
                 parts.append(f'<a class="btn-gold" href="{_esc(item["draft_link"])}">View draft in Gmail &rarr;</a>')
             else:
@@ -162,24 +199,16 @@ def build_digest_html(d: DigestData) -> str:
     good_items = d.top_important or _fallback_good_to_know(d)
     if not good_items:
         parts.append('<div class="empty">Nothing new to flag today.</div>')
-    for idx, item in enumerate(good_items, start=1):
-        parts.append('<div class="goodbox">')
-        parts.append(f'<div class="gtitle">{idx}. {_esc(item["subject"])}</div>')
-        parts.append(f'<div class="gbody">{_esc(item.get("summary", ""))}</div>')
-        if item.get("is_event") and item.get("event_start"):
-            cal_link = build_google_calendar_link(
-                title=item.get("event_title") or item["subject"],
-                start_iso=item["event_start"],
-                end_iso=item.get("event_end", ""),
-                location=item.get("event_location", ""),
-                description=item.get("summary", ""),
-                tz=d.timezone,
-            )
-            if cal_link:
-                parts.append(f'<a class="btn-cal" href="{_esc(cal_link)}">Add to Calendar &rarr;</a>')
-        if item.get("gmail_link"):
-            parts.append(f'<a class="openlink" href="{_esc(item["gmail_link"])}">Open &rarr;</a>')
-        parts.append("</div>")
+    else:
+        parts.append(_render_items(good_items, d.timezone))
+
+    # School - top 3 from the School label(s), kept separate from Good to
+    # know above so nothing shows up twice (see pipeline.py).
+    parts.append("<h2>School</h2>")
+    if not d.school_items:
+        parts.append('<div class="empty">Nothing new from School to flag today.</div>')
+    else:
+        parts.append(_render_items(d.school_items, d.timezone, variant="school"))
 
     # Sorted
     parts.append("<h2>Sorted &mdash; label applied, archived out of Inbox</h2>")

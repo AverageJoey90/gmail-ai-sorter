@@ -119,7 +119,11 @@ class AiClient:
 
     # ---- classification -----------------------------------------------------------
     def classify_email(self, subject: str, sender: str, body: str, label_names: list[str]) -> dict:
-        """Returns {"label": str|None, "confidence": float, "needs_reply": bool}."""
+        """Returns {"label": str|None, "confidence": float, "needs_reply": bool,
+        "summary": str}. `summary` is a one-line, plain description of what
+        the email is actually about (used in the digest's "Needs a reply"
+        section) - kept separate from `reasoning`, which explains the label
+        choice specifically and can read oddly out of that context."""
         schema = {
             "type": "object",
             "properties": {
@@ -127,8 +131,9 @@ class AiClient:
                 "confidence": {"type": "number"},
                 "needs_reply": {"type": "boolean"},
                 "reasoning": {"type": "string"},
+                "summary": {"type": "string"},
             },
-            "required": ["best_label", "confidence", "needs_reply"],
+            "required": ["best_label", "confidence", "needs_reply", "summary"],
         }
         prompt = f"""You are sorting one email into an existing Gmail label, from this
 fixed list of labels already used in this mailbox (never invent a new one):
@@ -139,6 +144,11 @@ If none of them genuinely fit, respond with best_label "__NONE__".
 Also decide whether this email needs a personal reply from the recipient
 (ignore no-reply/notification/marketing mail, receipts, and anything that
 is purely informational).
+
+Also write `summary`: a single plain sentence describing what this email
+is actually about (e.g. "Colleague asking to confirm Thursday's 3pm
+meeting") - independent of the labelling decision, since this is shown to
+the recipient directly.
 
 Email:
 Subject: {subject}
@@ -154,22 +164,43 @@ Body (truncated): {body[:4000]}
             "confidence": float(result.get("confidence", 0)),
             "needs_reply": bool(result.get("needs_reply", False)),
             "reasoning": result.get("reasoning", ""),
+            "summary": result.get("summary", ""),
         }
 
     # ---- draft replies -----------------------------------------------------------
-    def draft_reply(self, subject: str, sender: str, body: str, user_name: str = "Joe") -> str:
+    def draft_reply(self, subject: str, sender: str, body: str, user_name: str = "Joe") -> dict:
+        """Returns {"reply_body": str, "reply_gist": str}. `reply_gist` is a
+        single plain sentence paraphrasing what the drafted reply actually
+        says (e.g. "Confirms Thursday 3pm works"), shown in the digest so
+        the gist is visible without opening the draft in Gmail."""
+        schema = {
+            "type": "object",
+            "properties": {
+                "reply_body": {"type": "string"},
+                "reply_gist": {"type": "string"},
+            },
+            "required": ["reply_body", "reply_gist"],
+        }
         prompt = f"""Write a short, polite, ready-to-send draft email reply from {user_name} to
 the email below. Match the sender's tone/formality. Keep it concise
 (a few sentences), don't invent facts or commitments the original email
 doesn't support, and leave a placeholder like [confirm details] if a real
-answer requires information you don't have. Output ONLY the reply body
-text, no subject line, no "Dear/Hi" salutation preamble explanation.
+answer requires information you don't have.
+
+Return JSON with two fields: `reply_body` (ONLY the reply body text - no
+subject line, no explanation of what you did) and `reply_gist` (a single
+plain sentence paraphrasing what that reply actually says, e.g. "Confirms
+Thursday 3pm works" or "Asks for a couple more days to decide").
 
 Subject: {subject}
 From: {sender}
 Body: {body[:4000]}
 """
-        return self._generate(prompt).strip()
+        result = self._generate(prompt, response_schema=schema)
+        return {
+            "reply_body": result.get("reply_body", "").strip(),
+            "reply_gist": result.get("reply_gist", "").strip(),
+        }
 
     # ---- importance ranking + summaries -----------------------------------------------------------
     def rank_and_summarize(self, emails: list[dict], top_n: int = 5, tz: str = "Europe/London") -> list[dict]:

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import date, datetime
 from pathlib import Path
 
 
@@ -31,6 +32,21 @@ class StateStore:
     def mark_ran_today(self, account_address: str, date_str: str) -> None:
         self._data.setdefault("last_run_date", {})[account_address] = date_str
         self._save()
+
+    def days_since_last_run(self, account_address: str, today: date) -> int | None:
+        """How many days ago `account_address` last ran, or None if it has
+        never run - used to gate weekly-frequency accounts (see main.py's
+        `_is_due`) without a second stored field: last_run_date already has
+        everything needed, just parsed back into a real date so the
+        difference can be computed."""
+        raw = self.last_run_date(account_address)
+        if not raw:
+            return None
+        try:
+            last = datetime.strptime(raw, "%Y-%m-%d").date()
+        except ValueError:
+            return None
+        return (today - last).days
 
     def _save(self) -> None:
         os.makedirs(self._path.parent, exist_ok=True)

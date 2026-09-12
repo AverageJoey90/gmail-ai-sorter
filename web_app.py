@@ -244,6 +244,17 @@ def create_app(bootstrap_store: BootstrapStore, store: SettingsStore) -> Flask:
                   <button type="submit" class="secondary">Save</button>
                 </div>
               </form>
+              <form method="post" action="{url_for('update_frequency', index=a['index'])}" class="field" style="margin-top:10px">
+                <label>Run frequency for this account (blank = use the default above, {_esc(settings['digest_frequency'])})</label>
+                <div class="row">
+                  <select name="digest_frequency">
+                    <option value="" {"selected" if not a.get("digest_frequency") else ""}>Default ({_esc(settings['digest_frequency'])})</option>
+                    <option value="daily" {"selected" if a.get("digest_frequency") == "daily" else ""}>Daily</option>
+                    <option value="weekly" {"selected" if a.get("digest_frequency") == "weekly" else ""}>Weekly</option>
+                  </select>
+                  <button type="submit" class="secondary">Save</button>
+                </div>
+              </form>
             </div>""")
 
         accounts_html = "".join(account_cards) or '<div class="card muted">No Gmail accounts connected yet.</div>'
@@ -263,8 +274,16 @@ def create_app(bootstrap_store: BootstrapStore, store: SettingsStore) -> Flask:
         <div class="card">
         <form method="post" action="{url_for('save_settings')}">
           <div class="field">
-            <label for="run_at">Daily run time ({_esc(settings['timezone'])})</label>
+            <label for="run_at">Run time ({_esc(settings['timezone'])})</label>
             <input type="text" id="run_at" name="run_at_local_time" value="{_esc(settings['run_at_local_time'])}" placeholder="07:00">
+          </div>
+          <div class="field">
+            <label for="frequency">Run frequency</label>
+            <select id="frequency" name="digest_frequency">
+              <option value="daily" {"selected" if settings['digest_frequency'] == "daily" else ""}>Daily</option>
+              <option value="weekly" {"selected" if settings['digest_frequency'] == "weekly" else ""}>Weekly (checks a full week of mail in each labelled folder, not just unread)</option>
+            </select>
+            <div class="muted">Any account can override this individually below.</div>
           </div>
           <div class="field">
             <label for="threshold">Label-match confidence threshold (0-1)</label>
@@ -276,8 +295,8 @@ def create_app(bootstrap_store: BootstrapStore, store: SettingsStore) -> Flask:
             <input type="text" id="ignore" name="ignore_labels" value="{_esc(', '.join(settings['ignore_labels']))}">
           </div>
           <div class="field">
-            <label for="always_important">Labels that always show in "Good to know" (comma-separated)</label>
-            <input type="text" id="always_important" name="always_important_labels" value="{_esc(', '.join(settings['always_important_labels']))}">
+            <label for="school_labels">Labels that get their own "School" digest section (comma-separated)</label>
+            <input type="text" id="school_labels" name="school_section_labels" value="{_esc(', '.join(settings['school_section_labels']))}">
           </div>
           <button type="submit">Save settings</button>
         </form>
@@ -294,19 +313,24 @@ def create_app(bootstrap_store: BootstrapStore, store: SettingsStore) -> Flask:
         except ValueError:
             return redirect(url_for("dashboard", flash="Run time must be HH:MM - not saved."))
 
+        frequency = request.form.get("digest_frequency", "daily").strip()
+        if frequency not in ("daily", "weekly"):
+            frequency = "daily"
+
         try:
             threshold = max(0.0, min(1.0, float(request.form.get("classify_confidence_threshold", 0.7))))
         except ValueError:
             threshold = 0.7
 
         ignore_labels = [s.strip() for s in request.form.get("ignore_labels", "").split(",") if s.strip()]
-        always_important_labels = [s.strip() for s in request.form.get("always_important_labels", "").split(",") if s.strip()]
+        school_section_labels = [s.strip() for s in request.form.get("school_section_labels", "").split(",") if s.strip()]
 
         store.update_settings(
             run_at_local_time=run_at,
+            digest_frequency=frequency,
             classify_confidence_threshold=threshold,
             ignore_labels=ignore_labels,
-            always_important_labels=always_important_labels,
+            school_section_labels=school_section_labels,
         )
         return redirect(url_for("dashboard", flash="Settings saved."))
 
@@ -332,6 +356,18 @@ def create_app(bootstrap_store: BootstrapStore, store: SettingsStore) -> Flask:
             return redirect(url_for("dashboard", flash="Run time must be HH:MM - not saved."))
         store.update_account(index, run_at_local_time=run_at)
         return redirect(url_for("dashboard", flash=f"Run time for this account set to {run_at}."))
+
+    @app.post("/accounts/<int:index>/frequency")
+    def update_frequency(index: int):
+        frequency = request.form.get("digest_frequency", "").strip()
+        if not frequency:
+            # Blank means "use the default frequency" - clear any override.
+            store.update_account(index, digest_frequency=None)
+            return redirect(url_for("dashboard", flash="This account now uses the default run frequency."))
+        if frequency not in ("daily", "weekly"):
+            return redirect(url_for("dashboard", flash="Run frequency must be daily or weekly - not saved."))
+        store.update_account(index, digest_frequency=frequency)
+        return redirect(url_for("dashboard", flash=f"Run frequency for this account set to {frequency}."))
 
     @app.post("/accounts/<int:index>/remove")
     def remove_account(index: int):
