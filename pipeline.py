@@ -35,7 +35,12 @@ HOLD_UNREAD_GRACE_DAYS = 7
 # is sent back to the same account it came from). Every past digest that's
 # found gets archived under this one label - none are ever removed, so it
 # builds a running history rather than trying to keep just the latest.
-WEEKLY_DIGEST_LABEL_NAME = "Weekly Digest"
+# The label's actual name/path is a configurable setting (see
+# settings_store.py's "weekly_digest_label_name") since Gmail's nested
+# labels use their full path as their real name (Joe's own real one turned
+# out to be "INBOX/Weekly Digest", not just "Weekly Digest") - this
+# constant is only the seed default for a fresh settings.json.
+DEFAULT_WEEKLY_DIGEST_LABEL_NAME = "Weekly Digest"
 # Shared between building the real subject line (below) and searching for
 # past ones (_archive_old_digests), so the two can never drift apart.
 DIGEST_SUBJECT_PREFIX_TEMPLATE = "Gmail daily digest - {address} - "
@@ -85,20 +90,22 @@ def _build_calendar_link(
     return f"{public_base_url.rstrip('/')}/ics/{token}.ics"
 
 
-def _archive_old_digests(gmail: GmailClient, address: str) -> int:
+def _archive_old_digests(gmail: GmailClient, address: str, label_name: str) -> int:
     """Moves any of THIS account's own previously-sent digest emails that
-    are still sitting in its inbox into the "Weekly Digest" label (created
-    if it doesn't already exist), so they don't clutter the inbox and -
-    just as importantly - aren't accidentally picked up and re-processed by
-    this same run's own inbox-sort step as if they were new mail (relevant
+    are still sitting in its inbox into `label_name` (matched case-
+    insensitively against this account's real labels, including a nested
+    one's full path - see GmailClient.get_or_create_label - and created if
+    truly nothing matches), so they don't clutter the inbox and - just as
+    importantly - aren't accidentally picked up and re-processed by this
+    same run's own inbox-sort step as if they were new mail (relevant
     whenever the digest is sent back to the same account it came from).
     Anything already archived/labelled from a previous run is left alone
     (this only ever looks at what's currently in the inbox). Returns how
     many were moved, for logging only."""
     try:
-        label_id = gmail.get_or_create_label(WEEKLY_DIGEST_LABEL_NAME)
+        label_id = gmail.get_or_create_label(label_name)
     except Exception:
-        log.exception("%s: failed to get/create the '%s' label, skipping digest cleanup this run", address, WEEKLY_DIGEST_LABEL_NAME)
+        log.exception("%s: failed to get/create the '%s' label, skipping digest cleanup this run", address, label_name)
         return 0
     prefix = DIGEST_SUBJECT_PREFIX_TEMPLATE.format(address=address)
     try:
@@ -112,7 +119,7 @@ def _archive_old_digests(gmail: GmailClient, address: str) -> int:
             gmail.apply_label_and_archive(msg_id, label_id)
             moved += 1
         except Exception:
-            log.exception("%s: failed to move old digest message %s into '%s'", address, msg_id, WEEKLY_DIGEST_LABEL_NAME)
+            log.exception("%s: failed to move old digest message %s into '%s'", address, msg_id, label_name)
     return moved
 
 
@@ -136,9 +143,10 @@ def run_account(account: dict, bootstrap: BootstrapConfig, settings: dict, ai: A
     # account, last run's copy would otherwise still be sitting unlabelled
     # in the inbox right now and get swept up as if it were brand-new mail.
     if bool(settings.get("move_old_digests_to_weekly_folder")):
-        moved = _archive_old_digests(gmail, address)
+        weekly_digest_label_name = settings.get("weekly_digest_label_name") or DEFAULT_WEEKLY_DIGEST_LABEL_NAME
+        moved = _archive_old_digests(gmail, address, weekly_digest_label_name)
         if moved:
-            log.info("%s: moved %d old digest email(s) into '%s'", address, moved, WEEKLY_DIGEST_LABEL_NAME)
+            log.info("%s: moved %d old digest email(s) into '%s'", address, moved, weekly_digest_label_name)
 
     ignore_labels = set(settings.get("ignore_labels", []))
     threshold = float(settings.get("classify_confidence_threshold", 0.7))

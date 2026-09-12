@@ -347,12 +347,22 @@ def create_app(bootstrap_store: BootstrapStore, store: SettingsStore) -> Flask:
             <label style="display:flex;align-items:center;gap:8px;font-weight:normal">
               <input type="checkbox" name="move_old_digests_to_weekly_folder" value="1"
                      {"checked" if settings.get("move_old_digests_to_weekly_folder") else ""} style="width:auto">
-              Move old digest emails into a "{_esc(pipeline.WEEKLY_DIGEST_LABEL_NAME)}" label
+              Move old digest emails into a label/folder
             </label>
             <div class="muted">Applies to every connected account. Before each run, any of that account's own
-              previous digest emails still sitting in its inbox get labelled "{_esc(pipeline.WEEKLY_DIGEST_LABEL_NAME)}"
-              (created automatically if it doesn't exist yet) and archived out of the inbox - so digests don't pile
-              up or get accidentally re-sorted as if they were new mail. Past digests are kept there, not deleted.</div>
+              previous digest emails still sitting in its inbox get labelled (and archived out of the inbox) with
+              the exact label name below - so digests don't pile up or get accidentally re-sorted as if they were
+              new mail. Past digests are kept there, not deleted.</div>
+          </div>
+          <div class="field">
+            <label for="weekly_digest_label_name">Label/folder name to use</label>
+            <input type="text" id="weekly_digest_label_name" name="weekly_digest_label_name"
+                   value="{_esc(settings.get('weekly_digest_label_name') or pipeline.DEFAULT_WEEKLY_DIGEST_LABEL_NAME)}">
+            <div class="muted">Must be the label's exact full name as Gmail shows it (matched regardless of
+              upper/lower case) - if it's a nested label, that includes its parent, e.g. "INBOX/Weekly Digest", not
+              just "Weekly Digest". Get this wrong and the app will create a new top-level label with this name
+              rather than finding your existing one. Created automatically the first time it's needed if nothing
+              matches.</div>
           </div>
           <button type="submit">Save settings</button>
         </form>
@@ -401,6 +411,9 @@ def create_app(bootstrap_store: BootstrapStore, store: SettingsStore) -> Flask:
         # its presence/absence (not its value) is the signal - same pattern
         # as the per-account "hold unread emails" checkbox (round 20).
         move_old_digests = "move_old_digests_to_weekly_folder" in request.form
+        weekly_digest_label_name = request.form.get("weekly_digest_label_name", "").strip()
+        if not weekly_digest_label_name:
+            return redirect(url_for("dashboard", flash="The digest label/folder name can't be blank - nothing saved."))
 
         store.update_settings(
             classify_confidence_threshold=threshold,
@@ -408,6 +421,7 @@ def create_app(bootstrap_store: BootstrapStore, store: SettingsStore) -> Flask:
             school_section_labels=school_section_labels,
             school_lookback_days=school_lookback_days,
             move_old_digests_to_weekly_folder=move_old_digests,
+            weekly_digest_label_name=weekly_digest_label_name,
         )
         return redirect(url_for("dashboard", flash="Settings saved."))
 

@@ -39,6 +39,14 @@ DEFAULTS: dict[str, Any] = {
     # unlike run time/frequency/weekday (round 18), this one Joe explicitly
     # asked to keep global rather than per-account.
     "move_old_digests_to_weekly_folder": False,
+    # The exact label/folder name (full path, e.g. Joe's own real one,
+    # "INBOX/Weekly Digest" - a nested label) to reuse for the above. Kept
+    # as a plain editable setting, same pattern as ignore_labels/
+    # school_section_labels, rather than a hardcoded name - Gmail's nested
+    # labels use the full path as their real name, so this has to be
+    # exactly right (case-insensitive, per get_or_create_label) to find an
+    # existing folder rather than creating a near-duplicate top-level one.
+    "weekly_digest_label_name": "Weekly Digest",
 }
 
 # Round 18: Joe asked for the run time / frequency / weekday to be purely

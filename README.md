@@ -149,14 +149,21 @@ combination is specifically what makes tapping the link produce a one-off
   section itself checks (default 14 -
   set it to whatever window makes sense as a reminder, e.g. 21 for three
   weeks, independent of each account's own run frequency above), and a
-  checkbox - "Move old digest emails into a 'Weekly Digest' label" - that
-  applies to every connected account (off by default). When on, before each
-  run any of that account's own previous digest emails still sitting in its
-  inbox get labelled "Weekly Digest" (created automatically the first time
-  it's needed) and archived out of the inbox, so digests don't pile up or
-  get accidentally re-sorted as if they were new mail - especially relevant
-  if a digest is sent back to the same account it came from. Past digests
-  are kept under that label, not deleted - it's a running history, not just
+  checkbox - "Move old digest emails into a label/folder" - that applies to
+  every connected account (off by default), plus a text field naming the
+  exact label/folder to use (defaults to "Weekly Digest", but **must be the
+  label's exact full name as Gmail shows it** - if it's a nested label,
+  that includes its parent, e.g. "INBOX/Weekly Digest", not just "Weekly
+  Digest"; matched regardless of upper/lower case, but get the path wrong
+  and the app will create a brand-new top-level label with that name rather
+  than finding your existing one). When the checkbox is on, before each run
+  any of that account's own previous digest emails still sitting in its
+  inbox get labelled with that exact name (created automatically the first
+  time it's needed if nothing matches) and archived out of the inbox, so
+  digests don't pile up or get accidentally re-sorted as if they were new
+  mail - especially relevant if a digest is sent back to the same account
+  it came from. Past digests are kept under that label, not deleted - it's
+  a running history, not just
   the single latest one.
 - **Last run status** per account (counts, or an error if something went
   wrong).

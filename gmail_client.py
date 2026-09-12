@@ -123,14 +123,21 @@ class GmailClient:
 
     # ---- labels -----------------------------------------------------------
     def get_or_create_label(self, name: str) -> str:
-        """Returns the id of the label `name`, creating it (visible, shown in
-        the label list) if this account doesn't already have one by that
-        exact name. Used for the "move old digests into a folder" setting so
-        the "Weekly Digest" label always exists rather than requiring the
-        user to create it by hand first."""
+        """Returns the id of the label `name` (matched case-insensitively,
+        after trimming whitespace, against every label this account already
+        has - Joe hit this for real: his existing label was "INBOX/Weekly
+        Digest", a nested label whose full name/path IS "INBOX/Weekly
+        Digest", not just "Weekly Digest" - matching on that exact full
+        string, case-insensitively, is what finds an existing nested label
+        like that instead of creating a near-duplicate top-level one).
+        Creates it (visible, shown in the label list) only if truly nothing
+        matches. Used for the "move old digests into a folder" setting so
+        the configured label always exists rather than requiring the user
+        to create it by hand first."""
         data = self._get("/labels")
+        wanted = name.strip().lower()
         for lbl in data.get("labels", []):
-            if lbl["name"] == name:
+            if lbl["name"].strip().lower() == wanted:
                 return lbl["id"]
         created = self._post("/labels", {
             "name": name,
