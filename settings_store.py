@@ -26,6 +26,13 @@ DEFAULTS: dict[str, Any] = {
     # since that's the common case, but editable from the dashboard without
     # a redeploy, and more than one label name can be listed.
     "school_section_labels": ["School"],
+    # How many days back the School section's own search looks (see
+    # pipeline.py) - deliberately independent of the daily/weekly frequency
+    # below, since the School section is a "what's coming up" reminder, not
+    # part of the normal sort/triage sweep. Default 14; Joe can set this to
+    # e.g. 21 for three weeks of lookback without changing how often the
+    # digest itself runs.
+    "school_lookback_days": 14,
     # "daily" (default) or "weekly" - how often the sort+digest run fires.
     # Can be overridden per-account (see add_account below); an account
     # left at None uses this global default. Weekly accounts still get

@@ -39,7 +39,12 @@ NAS, no `.env` file to hunt for.
    configure as "School" and picks the top 3 from those, same
    summary/event/calendar-link treatment as above - so school mail always
    gets its own spotlight rather than competing for a slot in step 4's
-   general importance ranking.
+   general importance ranking. This is a "what's coming up" reminder, not
+   part of the sort/triage above - the messages it surfaces aren't marked
+   read or re-labelled just for showing up here. How far back it looks is
+   its own setting (`school_lookback_days`, default 14) and doesn't change
+   with the daily/weekly setting below - a weekly account still gets the
+   same School lookback window it's configured for.
 6. Emails you (or whoever you set as the recipient) one HTML digest with:
    boxed counts up top, **Needs a reply** (with draft links), **Good to
    know** (top 5 + calendar links), **School** (top 3 + calendar links),
@@ -53,10 +58,12 @@ global default, same pattern as the per-account run time). A weekly
 account is still checked at its usual daily run-time each day, but only
 actually fires once about 7 days have passed since its last run - no
 separate day-of-week setting to configure. When it does fire, its
-labelled-folder sweep (step 2 above) and its School-section search (step
-5) both look at a full week/day-appropriate window of mail regardless of
-read state, rather than only what's unread, since a weekly account isn't
-checked in between runs.
+labelled-folder sweep (step 2 above) looks at a full week of mail
+regardless of read state, rather than only what's unread, since a weekly
+account isn't checked in between runs. The School section (step 5) is
+deliberately **not** affected by this - it's a reminder feature, not part
+of the sort/triage sweep, so its own lookback window (`school_lookback_days`
+in Settings) stays whatever you've set it to regardless of daily/weekly.
 
 ## The dashboard (port 4568)
 
@@ -67,11 +74,13 @@ checked in between runs.
   them, without waiting for the schedule.
 - **Settings** - run time, run frequency (daily/weekly, each overridable
   per account), label-match confidence threshold, a list of labels the AI
-  should never sort into, and a list of labels that get their own
-  dedicated "School" digest section (defaults to `School` - add more label
-  names, comma-separated, for anything else that should get the same
-  own-section treatment rather than competing in the general "Good to
-  know" ranking).
+  should never sort into, a list of labels that get their own dedicated
+  "School" digest section (defaults to `School` - add more label names,
+  comma-separated, for anything else that should get the same own-section
+  treatment rather than competing in the general "Good to know" ranking),
+  and how many days back the School section itself checks (default 14 -
+  set it to whatever window makes sense as a reminder, e.g. 21 for three
+  weeks, independent of the daily/weekly run frequency above).
 - **Last run status** per account (counts, or an error if something went
   wrong).
 
@@ -466,9 +475,9 @@ with no terminal involved.
    connected. Repeat for the second account (sign out of Google or use an
    incognito window so the picker offers the other account).
 3. Adjust **Settings** if you want (run time, daily/weekly frequency,
-   confidence threshold, ignore list, School-section labels), and set each
-   account's digest recipient if you want the digest to land somewhere
-   other than the account's own inbox.
+   confidence threshold, ignore list, School-section labels and lookback
+   days), and set each account's digest recipient if you want the digest
+   to land somewhere other than the account's own inbox.
 4. Click **Run now** on an account rather than waiting for the schedule,
    then refresh in a minute or two. Check: did the digest email arrive?
    Did a couple of inbox emails get labelled and archived? Does a "Needs

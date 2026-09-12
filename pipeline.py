@@ -201,20 +201,25 @@ def run_account(account: dict, bootstrap: BootstrapConfig, settings: dict, ai: A
 
     # ---- 3b. School section: independent recent-window search, top 3 -----------------------------------------------------------
     # Deliberately its own search (not just reusing what the sweep above
-    # happened to find) so the School section reflects a proper recent
-    # window even on days nothing new was unread - e.g. a still-unread
-    # week-old school newsletter should still be eligible. Messages fetched
-    # only for this step are NOT added to all_reviewed / marked read /
-    # counted as "reviewed": surfacing something in a digest highlight isn't
-    # the same as having processed it.
+    # happened to find), and deliberately NOT tied to the daily/weekly
+    # frequency above - the School section is a "what's coming up" reminder
+    # (Joe's framing), so its lookback is its own configurable setting
+    # rather than shrinking to match a weekly account's shorter sweep
+    # window. Messages fetched only for this step are NOT added to
+    # all_reviewed / marked read / counted as "reviewed": surfacing
+    # something in a digest highlight isn't the same as having processed it.
     school_items: list[dict] = []
     if school_label_names:
-        school_window = "newer_than:7d" if frequency == "weekly" else "newer_than:14d"
+        try:
+            school_lookback_days = max(1, int(settings.get("school_lookback_days", 14) or 14))
+        except (TypeError, ValueError):
+            school_lookback_days = 14
+        school_window = f"newer_than:{school_lookback_days}d"
         candidate_ids: list[str] = []
         seen_ids: set[str] = set()
         for name in school_label_names:
             try:
-                ids = gmail.search_message_ids(f'label:"{name}" {school_window}', max_results=15)
+                ids = gmail.search_message_ids(f'label:"{name}" {school_window}', max_results=30)
             except Exception:
                 log.exception("%s: failed searching School label %s for the School section", address, name)
                 continue
@@ -222,7 +227,7 @@ def run_account(account: dict, bootstrap: BootstrapConfig, settings: dict, ai: A
                 if mid not in seen_ids:
                     seen_ids.add(mid)
                     candidate_ids.append(mid)
-        candidate_ids = candidate_ids[:15]  # bound Gmail fetches + Gemini prompt size
+        candidate_ids = candidate_ids[:20]  # bound Gmail fetches + Gemini prompt size
 
         school_candidates = []
         school_lookup: dict[str, dict] = {}

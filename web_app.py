@@ -298,6 +298,12 @@ def create_app(bootstrap_store: BootstrapStore, store: SettingsStore) -> Flask:
             <label for="school_labels">Labels that get their own "School" digest section (comma-separated)</label>
             <input type="text" id="school_labels" name="school_section_labels" value="{_esc(', '.join(settings['school_section_labels']))}">
           </div>
+          <div class="field">
+            <label for="school_lookback_days">School section lookback (days)</label>
+            <input type="number" id="school_lookback_days" name="school_lookback_days" step="1" min="1" max="180"
+                   value="{settings['school_lookback_days']}">
+            <div class="muted">How far back the School section checks for upcoming events/reminders - independent of the run frequency above (e.g. 21 for three weeks). Doesn't change what gets sorted or how often the digest runs.</div>
+          </div>
           <button type="submit">Save settings</button>
         </form>
         </div>
@@ -325,12 +331,20 @@ def create_app(bootstrap_store: BootstrapStore, store: SettingsStore) -> Flask:
         ignore_labels = [s.strip() for s in request.form.get("ignore_labels", "").split(",") if s.strip()]
         school_section_labels = [s.strip() for s in request.form.get("school_section_labels", "").split(",") if s.strip()]
 
+        try:
+            school_lookback_days = int(request.form.get("school_lookback_days", 14))
+            if school_lookback_days < 1:
+                raise ValueError
+        except ValueError:
+            return redirect(url_for("dashboard", flash="School section lookback must be a whole number of days (1 or more) - not saved."))
+
         store.update_settings(
             run_at_local_time=run_at,
             digest_frequency=frequency,
             classify_confidence_threshold=threshold,
             ignore_labels=ignore_labels,
             school_section_labels=school_section_labels,
+            school_lookback_days=school_lookback_days,
         )
         return redirect(url_for("dashboard", flash="Settings saved."))
 
