@@ -45,6 +45,29 @@ DEFAULT_WEEKLY_DIGEST_LABEL_NAME = "Weekly Digest"
 # past ones (_archive_old_digests), so the two can never drift apart.
 DIGEST_SUBJECT_PREFIX_TEMPLATE = "Gmail daily digest - {address} - "
 
+# How many emails go into one classify_emails_batch() Gemini call instead
+# of one call each - see ai_client.py. Kept modest rather than as large as
+# possible: a bigger batch means fewer calls, but also means a single
+# failed/malformed batch call leaves more messages without a result (each
+# one still falls through to the same "left in inbox"/"classification
+# failed" handling a lone failure would, just more of them at once) - 5
+# was picked as a reasonable balance, not a hard requirement.
+CLASSIFY_BATCH_SIZE = 5
+
+
+def _chunk(items: list, size: int) -> list[list]:
+    return [items[i:i + size] for i in range(0, len(items), size)]
+
+
+def resolve_gemini_api_key(account: dict, bootstrap: BootstrapConfig) -> str:
+    """An account can optionally carry its own Gemini API key (see
+    settings_store.py's "gemini_api_key") so two accounts sharing this app
+    aren't sharing one API key's rate limit either - falls back to the
+    shared key from Setup when the account hasn't set one, which is the
+    only behaviour that existed before this option and stays the default
+    for every account unless someone opts in."""
+    return account.get("gemini_api_key") or bootstrap.gemini_api_key
+
 
 def _message_age_days(internal_date_ms: int, now: datetime | None = None) -> float:
     """How many days old a message is, based on Gmail's internalDate (epoch
@@ -225,6 +248,7 @@ def run_account(account: dict, bootstrap: BootstrapConfig, settings: dict, ai: A
     # ---- 1. Inbox sort -----------------------------------------------------------
     inbox_ids = gmail.search_message_ids("in:inbox", max_results=200)
     log.info("%s: %d messages currently in inbox", address, len(inbox_ids))
+    inbox_msgs = []
     for msg_id in inbox_ids:
         try:
             msg = gmail.get_message(msg_id)
@@ -241,11 +265,30 @@ def run_account(account: dict, bootstrap: BootstrapConfig, settings: dict, ai: A
             # updated below if it gets confidently labeled School this run.
             "exclude_from_good_to_know": bool(set(msg.label_ids) & school_label_ids),
         }
+        inbox_msgs.append((ref, msg))
 
+    # Classified in batches (see CLASSIFY_BATCH_SIZE) rather than one
+    # Gemini call per message - each email is still judged completely on
+    # its own (see the batch prompt in ai_client.py), this just cuts the
+    # number of API calls a busy inbox makes. A ref missing from the
+    # results (its whole batch call failed, or the model skipped it) is
+    # handled the same way a single classify_email failure always was.
+    inbox_results: dict[str, dict] = {}
+    for batch in _chunk(inbox_msgs, CLASSIFY_BATCH_SIZE):
+        batch_payload = [
+            {"ref": ref, "subject": msg.subject, "sender": msg.sender, "body": msg.body_text}
+            for ref, msg in batch
+        ]
         try:
-            result = ai.classify_email(msg.subject, msg.sender, msg.body_text, label_names)
+            inbox_results.update(ai.classify_emails_batch(batch_payload, label_names))
         except Exception:
-            log.exception("%s: classification failed for %s, leaving in inbox", address, msg_id)
+            log.exception("%s: batch classification failed for %d inbox message(s)", address, len(batch))
+
+    for ref, msg in inbox_msgs:
+        msg_id = msg.id
+        result = inbox_results.get(ref)
+        if result is None:
+            log.warning("%s: no classification result for inbox message %s, leaving in inbox", address, msg_id)
             unmatched_items.append({
                 "subject": msg.subject, "sender": msg.sender,
                 "reason": "Classification failed - see container logs.", "gmail_link": msg.permalink(),
@@ -331,12 +374,12 @@ def run_account(account: dict, bootstrap: BootstrapConfig, settings: dict, ai: A
             school_folder_ids.update(ids)
 
     log.info("%s: %d messages found across %d labelled folders (%s)", address, len(folder_ids), len(label_names), folder_query_suffix)
+    folder_msgs = []
     for msg_id in folder_ids:
         try:
             msg = gmail.get_message(msg_id)
-            gmail.mark_read(msg_id)
         except Exception:
-            log.exception("%s: failed processing folder message %s, skipping", address, msg_id)
+            log.exception("%s: failed fetching folder message %s, skipping", address, msg_id)
             continue
 
         ref = f"folder_{msg.id}"
@@ -345,12 +388,38 @@ def run_account(account: dict, bootstrap: BootstrapConfig, settings: dict, ai: A
             "body": msg.body_text, "gmail_link": msg.permalink(),
             "exclude_from_good_to_know": msg_id in school_folder_ids or bool(set(msg.label_ids) & school_label_ids),
         }
+        folder_msgs.append((ref, msg))
 
+    # Batched the same way as the inbox sort above (see CLASSIFY_BATCH_SIZE).
+    folder_results: dict[str, dict] = {}
+    for batch in _chunk(folder_msgs, CLASSIFY_BATCH_SIZE):
+        batch_payload = [
+            {"ref": ref, "subject": msg.subject, "sender": msg.sender, "body": msg.body_text}
+            for ref, msg in batch
+        ]
         try:
-            result = ai.classify_email(msg.subject, msg.sender, msg.body_text, label_names)
-            maybe_flag_needs_reply(msg, result)
+            folder_results.update(ai.classify_emails_batch(batch_payload, label_names))
         except Exception:
-            log.exception("%s: needs-reply check failed for folder message %s", address, msg_id)
+            log.exception("%s: batch classification failed for %d folder message(s)", address, len(batch))
+
+    for ref, msg in folder_msgs:
+        result = folder_results.get(ref)
+        if result is None:
+            # Deliberately NOT marking this one read: it hasn't actually
+            # been checked for needs-reply yet, so it needs to still show
+            # up in a future is:unread sweep rather than silently losing
+            # its needs-reply check forever the moment classification
+            # fails once (the bug an earlier version of this file had).
+            log.warning(
+                "%s: needs-reply check skipped for folder message %s (no classification result) - "
+                "left unread, will be retried next sweep", address, msg.id,
+            )
+            continue
+        try:
+            gmail.mark_read(msg.id)
+        except Exception:
+            log.exception("%s: failed to mark folder message %s as read", address, msg.id)
+        maybe_flag_needs_reply(msg, result)
 
     # ---- 3. Top 5 important + event detection ("Good to know") -----------------------------------------------------------
     # School-section candidates are left out of this ranking pool entirely -
@@ -476,11 +545,19 @@ def run_all(bootstrap: BootstrapConfig, settings_store: SettingsStore) -> None:
     """Runs every connected account once, recording results as it goes.
     A failure on one account is logged and recorded, never allowed to stop
     the others or crash the caller (the scheduler thread and the "run all"
-    dashboard action both depend on that)."""
-    ai = AiClient(bootstrap.gemini_api_key, bootstrap.gemini_model)
+    dashboard action both depend on that).
+
+    A fresh AiClient is built per account (rather than one shared across
+    all of them) so an account with its own Gemini key (see
+    resolve_gemini_api_key) actually uses it, and so each account's
+    pacing/circuit-breaker state (ai_client.py) reflects only its own
+    calls rather than being skewed by another account's run moments
+    earlier - the same isolation the scheduled/manual per-account runs
+    already had."""
     settings = settings_store.get_settings()
     for account in settings_store.list_accounts():
         try:
+            ai = AiClient(resolve_gemini_api_key(account, bootstrap), bootstrap.gemini_model)
             summary = run_account(account, bootstrap, settings, ai)
         except Exception:
             log.exception("Run failed for %s", account.get("address"))

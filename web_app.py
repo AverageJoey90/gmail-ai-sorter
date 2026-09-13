@@ -245,6 +245,10 @@ def create_app(bootstrap_store: BootstrapStore, store: SettingsStore) -> Flask:
             weekday_val = a.get("digest_weekday") or DEFAULT_DIGEST_WEEKDAY
             weekday_wrap_id = f"weekday-wrap-{a['index']}"
             hold_unread_checked = "checked" if a.get("hold_unread_emails") else ""
+            gemini_key_placeholder = (
+                "(already set - leave blank to keep using it)" if a.get("gemini_api_key")
+                else "(optional - leave blank to share the key from Setup)"
+            )
 
             account_cards.append(f"""
             <div class="card">
@@ -295,6 +299,19 @@ def create_app(bootstrap_store: BootstrapStore, store: SettingsStore) -> Flask:
                     While checked, an unread inbox email won't be labelled/archived until it's read or
                     {pipeline.HOLD_UNREAD_GRACE_DAYS} days old, whichever comes first. It's still fully reviewed either
                     way - it can still appear in Good to know/School and still gets a draft reply if it needs one.
+                  </div>
+                </div>
+                <div class="field">
+                  <label>Gemini API key for this account</label>
+                  <input type="password" name="gemini_api_key" value="" placeholder="{_esc(gemini_key_placeholder)}"
+                         autocomplete="new-password">
+                  <div class="muted" style="margin-top:4px">
+                    Optional. Every account shares one Gemini key (from Setup) by default, which also means they
+                    share that key's rate limit - if you're running two or more busy accounts, give this one its
+                    own free key from <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a>
+                    so they stop competing. Never shown back here once saved, for the same reason a password isn't -
+                    leave it blank to keep whatever's already set, or to keep sharing the Setup key if nothing's
+                    been set yet.
                   </div>
                 </div>
                 <button type="submit" class="save-btn saved">Saved</button>
@@ -458,14 +475,22 @@ def create_app(bootstrap_store: BootstrapStore, store: SettingsStore) -> Flask:
         # its presence/absence in request.form (not its value) is the signal.
         hold_unread_emails = "hold_unread_emails" in request.form
 
-        store.update_account(
-            index,
+        fields = dict(
             digest_recipient=recipient,
             run_at_local_time=run_at,
             digest_frequency=frequency,
             digest_weekday=weekday,
             hold_unread_emails=hold_unread_emails,
         )
+        # Never echoed back into the form (same treatment as the Setup
+        # page's secret fields) - a blank submission means "leave whatever
+        # is already set alone", not "clear it", so it's simply left out of
+        # the update rather than written as an empty string.
+        gemini_api_key = request.form.get("gemini_api_key", "").strip()
+        if gemini_api_key:
+            fields["gemini_api_key"] = gemini_api_key
+
+        store.update_account(index, **fields)
         return redirect(url_for("dashboard", flash="Account settings saved."))
 
     @app.post("/accounts/<int:index>/remove")
@@ -486,7 +511,7 @@ def create_app(bootstrap_store: BootstrapStore, store: SettingsStore) -> Flask:
         cfg = g.bootstrap
 
         def _run():
-            ai = AiClient(cfg.gemini_api_key, cfg.gemini_model)
+            ai = AiClient(pipeline.resolve_gemini_api_key(account, cfg), cfg.gemini_model)
             settings = store.get_settings()
             try:
                 summary = pipeline.run_account(account, cfg, settings, ai)

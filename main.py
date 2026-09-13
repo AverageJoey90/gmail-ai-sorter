@@ -137,7 +137,7 @@ def scheduler_loop(bootstrap_store: BootstrapStore, store: SettingsStore) -> Non
                     "Scheduled run starting for %s (run time %02d:%02d, %s)",
                     account["address"], hh, mm, frequency,
                 )
-                ai = AiClient(bootstrap.gemini_api_key, bootstrap.gemini_model)
+                ai = AiClient(pipeline.resolve_gemini_api_key(account, bootstrap), bootstrap.gemini_model)
                 try:
                     summary = pipeline.run_account(account, bootstrap, settings, ai)
                 except Exception:

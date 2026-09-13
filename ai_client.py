@@ -47,6 +47,52 @@ BASE_DELAY_SECONDS = 1.0
 # instead of stalling the whole account's run.
 MAX_DELAY_SECONDS = 30.0
 
+# ---- proactive pacing + a grounded "we're clearly rate-limited" circuit breaker ----
+# None of this changes what any single call is allowed to do or how many
+# times it's retried - MAX_RETRIES above is untouched, so an individual
+# email's classification outcome is never affected. It only changes how
+# eagerly calls are fired and, in one narrow case backed by Google's own
+# explicit signal (not a guess), skips a call that has already proven it
+# cannot succeed - so a busy run finishes faster without ever producing a
+# different result than the unthrottled version would eventually reach.
+#
+# Google's free tier for gemini-2.5-flash is only ~10 requests/minute (see
+# the comment above), so a baseline gap of 6.5s between calls keeps a
+# single AiClient under that on its own, without needing to guess how many
+# other calls might be sharing the same key concurrently.
+BASE_PACE_SECONDS = 6.5
+MAX_PACE_SECONDS = 30.0
+# Any call that needed at least one retry grows the gap before the next
+# call (we're clearly bumping the limit); a clean call with zero retries
+# gradually relaxes it back down. This is what actually stops a burst of
+# calls (e.g. sweeping 25 folder messages) from ever turning into the kind
+# of 429 storm seen in the logs, rather than just reacting to it faster.
+PACE_GROWTH_FACTOR = 1.6
+PACE_DECAY_FACTOR = 0.85
+
+# Google's RetryInfo can say "wait" anywhere from a few seconds (an
+# ordinary per-minute limit) to many minutes (the *daily* quota, which
+# nothing inside one run can fix). A single occurrence of a long suggested
+# delay is NOT enough to skip retrying that call early - it might be
+# conservative, or the limit might ease before this call's own retries run
+# out - so every call still gets its full, unmodified MAX_RETRIES/
+# MAX_DELAY_SECONDS treatment and its outcome is never guessed at. This
+# threshold only marks the signal for bookkeeping (see
+# LONG_OUTAGE_TRIP_THRESHOLD below).
+GIVE_UP_DELAY_SECONDS = 90.0
+# Only once several DIFFERENT calls in a row have each been retried in
+# full and still failed, each with that long-delay signal, do we treat it
+# as real, sustained evidence and start skipping the network call entirely
+# on FURTHER calls for a while - Google has, by then, told us repeatedly
+# and consistently that nothing will succeed right now. One real "probe"
+# call is still let through every PROBE_INTERVAL_SECONDS so a recovered
+# quota is noticed automatically; a probe is always a genuine attempt,
+# never a synthetic failure, so this can only skip calls that several real,
+# fully-retried attempts already proved would fail - it never shortens or
+# guesses at any individual call's own retry budget.
+LONG_OUTAGE_TRIP_THRESHOLD = 3
+PROBE_INTERVAL_SECONDS = 90.0
+
 
 def _retry_delay_from_response(resp: requests.Response) -> float | None:
     """Google's 429/503 error bodies can carry a machine-readable
@@ -76,8 +122,63 @@ class AiClient:
             raise SystemExit("GEMINI_API_KEY is not set - get a free key at https://aistudio.google.com/apikey")
         self.api_key = api_key
         self.model = model
+        # Pacing/circuit-breaker state - see the constants above. Lives on
+        # the instance (not module-level) so each AiClient - one per
+        # account per scheduled run, or one shared across accounts in a
+        # manual "run all" - paces only against calls it made itself.
+        self._pace_seconds = BASE_PACE_SECONDS
+        self._last_call_at = 0.0
+        self._long_outage_streak = 0
+        self._last_probe_at = 0.0
+
+    def _pace(self) -> None:
+        """Sleeps just long enough since this instance's last call to
+        respect the current pacing gap, then records the new call time."""
+        now = time.monotonic()
+        wait = self._pace_seconds - (now - self._last_call_at)
+        if wait > 0:
+            time.sleep(wait)
+        self._last_call_at = time.monotonic()
+
+    def _circuit_is_open(self) -> bool:
+        """True if the last several calls all hit Google's "wait minutes"
+        signal, so this call should be skipped without even trying -
+        unless it's time for a periodic probe to check whether that's
+        resolved. See LONG_OUTAGE_TRIP_THRESHOLD/PROBE_INTERVAL_SECONDS."""
+        if self._long_outage_streak < LONG_OUTAGE_TRIP_THRESHOLD:
+            return False
+        now = time.monotonic()
+        if now - self._last_probe_at >= PROBE_INTERVAL_SECONDS:
+            self._last_probe_at = now
+            return False  # let exactly this one through as a probe
+        return True
+
+    def _record_success(self) -> None:
+        self._pace_seconds = max(BASE_PACE_SECONDS, self._pace_seconds * PACE_DECAY_FACTOR)
+        self._long_outage_streak = 0
+
+    def _record_retry_needed(self) -> None:
+        self._pace_seconds = min(MAX_PACE_SECONDS, self._pace_seconds * PACE_GROWTH_FACTOR)
+
+    def _record_long_outage(self) -> None:
+        self._record_retry_needed()
+        self._long_outage_streak += 1
+        if self._long_outage_streak == LONG_OUTAGE_TRIP_THRESHOLD:
+            # Just tripped - start the probe clock from right now, not from
+            # this instance's arbitrary "never probed" starting point
+            # (_last_probe_at's default of 0.0), so the very first check
+            # right after tripping doesn't look like a probe is already
+            # overdue and let a call straight through untripped.
+            self._last_probe_at = time.monotonic()
 
     def _generate(self, prompt: str, response_schema: dict | None = None, temperature: float = 0.2) -> dict | str:
+        if self._circuit_is_open():
+            raise RuntimeError(
+                "Gemini API has told us repeatedly to wait minutes (quota exhausted) - "
+                "skipping this call so it fails immediately instead of after another doomed "
+                "multi-minute retry; it's re-checked periodically and will resume automatically."
+            )
+
         payload: dict = {
             "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {"temperature": temperature},
@@ -88,25 +189,57 @@ class AiClient:
 
         url = API_URL_TMPL.format(model=self.model)
 
+        self._pace()
         attempt = 0
+        # Whether Google told us, on any attempt of THIS call, that it
+        # wants a genuinely long wait (see GIVE_UP_DELAY_SECONDS) - noted
+        # for bookkeeping only. This never shortens or skips this call's
+        # own retry loop below, which is untouched from before this round
+        # of changes (still up to MAX_RETRIES, still capped at
+        # MAX_DELAY_SECONDS) - so a single email's outcome is never guessed
+        # at. It only feeds _long_outage_streak, which can make a *later*,
+        # different call skip early - and only after several of these in a
+        # row have already proven, for real, that retrying doesn't help.
+        had_long_delay_signal = False
         while True:
             resp = requests.post(url, params={"key": self.api_key}, json=payload, timeout=60)
-            if resp.status_code in RETRYABLE_STATUS_CODES and attempt < MAX_RETRIES:
-                delay = _retry_delay_from_response(resp)
-                if delay is None:
-                    delay = BASE_DELAY_SECONDS * (2 ** attempt)
-                delay = min(delay, MAX_DELAY_SECONDS)
-                delay += random.uniform(0, delay * 0.25)  # jitter, avoids lock-step retries
-                attempt += 1
-                log.warning(
-                    "Gemini API returned %d (attempt %d/%d) - retrying in %.1fs",
-                    resp.status_code, attempt, MAX_RETRIES, delay,
-                )
-                time.sleep(delay)
-                continue
+            if resp.status_code in RETRYABLE_STATUS_CODES:
+                raw_delay = _retry_delay_from_response(resp)
+                if raw_delay is not None and raw_delay > GIVE_UP_DELAY_SECONDS:
+                    had_long_delay_signal = True
+                if attempt < MAX_RETRIES:
+                    delay = raw_delay if raw_delay is not None else BASE_DELAY_SECONDS * (2 ** attempt)
+                    delay = min(delay, MAX_DELAY_SECONDS)
+                    delay += random.uniform(0, delay * 0.25)  # jitter, avoids lock-step retries
+                    attempt += 1
+                    log.warning(
+                        "Gemini API returned %d (attempt %d/%d) - retrying in %.1fs",
+                        resp.status_code, attempt, MAX_RETRIES, delay,
+                    )
+                    time.sleep(delay)
+                    continue
             break
 
+        if resp.status_code in RETRYABLE_STATUS_CODES:
+            # Exhausted every retry - noting, for future calls, whether
+            # this exhaustion came with a "this is a long outage" signal.
+            if had_long_delay_signal:
+                self._record_long_outage()
+            else:
+                self._record_retry_needed()
+
+        # Unconditional, exactly as before this round of changes: raises
+        # the same HTTPError callers already catch for a retryable status
+        # that exhausted its retries AND for a non-retryable status (e.g.
+        # 403) that was never retried at all.
         resp.raise_for_status()
+
+        self._long_outage_streak = 0  # any success is proof we're not (or no longer) in a long outage
+        if attempt > 0:
+            self._record_retry_needed()
+        else:
+            self._record_success()
+
         data = resp.json()
         try:
             text = data["candidates"][0]["content"]["parts"][0]["text"]
@@ -166,6 +299,89 @@ Body (truncated): {body[:4000]}
             "reasoning": result.get("reasoning", ""),
             "summary": result.get("summary", ""),
         }
+
+    # ---- classification, several at once -----------------------------------------------------------
+    def classify_emails_batch(self, emails: list[dict], label_names: list[str]) -> dict[str, dict]:
+        """Same job as classify_email, for several emails in one Gemini call
+        instead of one call each - the fix for the 429 storms seen sweeping
+        a folder with many messages in it (one call per message very
+        quickly outran the free tier's ~10 requests/minute). `emails` is a
+        list of {"ref": str, "subject": str, "sender": str, "body": str}.
+        Returns {ref: result}, where each result has EXACTLY the same shape
+        classify_email returns for that one email - the prompt explicitly
+        tells the model to judge every email independently of the others in
+        the batch, so batching is purely a transport-level optimisation and
+        shouldn't change any individual email's classification. A ref
+        missing from the model's response (or the whole call failing) is
+        left out of the returned dict - callers treat a missing ref exactly
+        like a classify_email failure for that message."""
+        if not emails:
+            return {}
+        schema = {
+            "type": "object",
+            "properties": {
+                "results": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "ref": {"type": "string"},
+                            "best_label": {"type": "string", "enum": label_names + ["__NONE__"]},
+                            "confidence": {"type": "number"},
+                            "needs_reply": {"type": "boolean"},
+                            "reasoning": {"type": "string"},
+                            "summary": {"type": "string"},
+                        },
+                        "required": ["ref", "best_label", "confidence", "needs_reply", "summary"],
+                    },
+                }
+            },
+            "required": ["results"],
+        }
+        catalogue = "\n\n".join(
+            f"[{e['ref']}] Subject: {e['subject']}\nFrom: {e['sender']}\nBody (truncated): {e['body'][:4000]}"
+            for e in emails
+        )
+        prompt = f"""You are sorting SEVERAL emails - each tagged with a [ref] id - into an
+existing Gmail label, from this fixed list of labels already used in this
+mailbox (never invent a new one):
+{json.dumps(label_names)}
+
+Judge every email COMPLETELY INDEPENDENTLY of the others below - they are
+unrelated and just happen to be batched into one request for efficiency.
+Nothing about one email should influence your decision on another. For
+each one, if none of the labels genuinely fit, respond with best_label
+"__NONE__".
+
+For each email also decide whether it needs a personal reply from the
+recipient (ignore no-reply/notification/marketing mail, receipts, and
+anything that is purely informational), and write `summary`: a single
+plain sentence describing what that email is actually about (e.g.
+"Colleague asking to confirm Thursday's 3pm meeting") - independent of the
+labelling decision, since this may be shown to the recipient directly.
+
+Return exactly one entry in `results` for every [ref] below, each carrying
+its own `ref` value unchanged so it can be matched back up.
+
+{catalogue}
+"""
+        result = self._generate(prompt, response_schema=schema)
+        out: dict[str, dict] = {}
+        for r in result.get("results", []):
+            ref = r.get("ref")
+            if not ref:
+                continue
+            label = r.get("best_label")
+            if label == "__NONE__":
+                label = None
+            out[ref] = {
+                "label": label,
+                "confidence": float(r.get("confidence", 0)),
+                "needs_reply": bool(r.get("needs_reply", False)),
+                "reasoning": r.get("reasoning", ""),
+                "summary": r.get("summary", ""),
+            }
+        return out
 
     # ---- draft replies -----------------------------------------------------------
     def draft_reply(self, subject: str, sender: str, body: str, user_name: str = "Joe") -> dict:

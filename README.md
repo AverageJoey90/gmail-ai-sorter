@@ -122,6 +122,51 @@ Content-Type header and a `Content-Disposition: attachment` header. That
 combination is specifically what makes tapping the link produce a one-off
 "Add Event" prompt rather than an ongoing calendar "Subscribe" prompt.
 
+### Handling Gemini's rate limits efficiently
+
+Google's free tier for `gemini-2.5-flash` is only around 10 requests a
+minute, which a folder with even a couple of dozen unread messages can
+burst straight past if each one fires its own classification call back to
+back - the symptom is a wall of `Gemini API returned 429 (attempt...)`
+lines in the container logs, each message eating up to ~2 minutes of
+retries. A few things work together to keep this efficient without ever
+changing what actually gets sorted or what ends up in the digest:
+
+- **Emails are classified in small batches** (5 at a time) instead of one
+  Gemini call per email - each email in a batch is still judged completely
+  independently by the model, so this is purely a transport-level
+  optimisation. A batch that fails outright (rare - a genuine network/
+  parsing failure) leaves every message in it with no result, which gets
+  the exact same "left in the inbox, will retry next run" treatment a
+  single failed classification always got.
+- **A pacing gap is kept between Gemini calls**, starting around 6.5
+  seconds and stretching automatically (up to 30s) whenever a call needs
+  retries, then easing back down after a run of clean ones - this is what
+  actually stops a busy sweep from bursting into a 429 storm in the first
+  place, rather than just recovering from one faster.
+- **A grounded circuit breaker for a genuine, sustained outage** (e.g. the
+  *daily* quota, not just the per-minute one, is exhausted - Google says so
+  explicitly via a multi-minute suggested wait). This never shortens or
+  skips any individual email's own retry attempts - every email still gets
+  its full, unmodified retry budget, so no single email's outcome is ever
+  guessed at. Only once several different emails in a row have each been
+  retried in full and still failed with that same "wait a long time"
+  signal does the app start skipping the network call entirely for a
+  while, checking back with one real attempt every 90 seconds so it
+  resumes automatically the moment the quota recovers.
+- **Two Gmail accounts can use two separate Gemini keys** if you want them
+  to stop sharing one key's rate limit - see the optional "Gemini API key
+  for this account" field on each account's card on the dashboard (leave
+  it blank to keep sharing the key from Setup, which is unchanged and
+  still the default).
+- A pre-existing bug was also fixed alongside this: a folder-swept message
+  used to get marked as read *before* it was checked for needing a reply -
+  if that check then failed (e.g. a rate-limit error), the message had
+  already been marked read and would never reappear in a future sweep,
+  silently losing its needs-reply check for good. It's now only marked
+  read after a successful check, so a failure just means it's picked up
+  again next time, the same as any other left-in-inbox item.
+
 ## The dashboard (port 4568)
 
 - **Connect / disconnect Gmail accounts** - click a button, sign in to
@@ -131,9 +176,12 @@ combination is specifically what makes tapping the link produce a one-off
 - **Per-account settings, one Save button** - each Gmail account's own
   card has its digest recipient, run time, daily/weekly frequency, (only
   shown once you pick Weekly) which day of the week it fires on, and the
-  "leave unread emails for 7 days" checkbox (see above), all in one form
-  with a single Save button at the bottom. No global schedule to keep in
-  sync - just set each account the way you want it. The button reads
+  "leave unread emails for 7 days" checkbox (see above), and an optional
+  Gemini API key just for that account (see "Handling Gemini's rate limits
+  efficiently" below - leave it blank to keep sharing the key from Setup),
+  all in one form with a single Save button at the bottom. No global
+  schedule to keep in sync - just set each account the way you want it.
+  The button reads
   "Saved" in green until you change something on that card, then turns
   orange as a reminder there are unsaved changes - press it again to save
   and it goes back to green.

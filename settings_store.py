@@ -139,6 +139,12 @@ class SettingsStore:
                 # draft'. Off by default so behaviour is unchanged unless a
                 # user opts in on that account's card.
                 "hold_unread_emails": False,
+                # Optional - lets this account use its own Gemini API key
+                # instead of sharing the one from Setup, so two accounts
+                # aren't splitting one key's rate limit between them. Blank
+                # (the default) means "use the shared key", unchanged from
+                # before this option existed - see pipeline.resolve_gemini_api_key.
+                "gemini_api_key": "",
                 "connected_at": datetime.now(timezone.utc).isoformat(),
                 "last_run": None,
             })
