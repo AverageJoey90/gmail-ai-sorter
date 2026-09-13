@@ -116,6 +116,19 @@ email appears in - it's still counted once toward "reviewed", and if it was
 successfully labelled it still shows up as normal in the separate "Sorted"
 table further down.
 
+### Summaries stay short and clean, even for forwarded emails
+
+Every item in "Needs a reply", "Good to know", and "School" is meant to be
+a short, plain description of what the email is about - never the raw
+contents of a forwarded email's quoted header block (its "---------- Forwarded
+message ---------" line, sender name, timestamp, and raw address). If the
+AI's own summarising call fails for a batch (a rate limit, a temporary
+outage), the fallback strips that boilerplate out before showing anything,
+falling back further to a plain "Open in Gmail to see the full message."
+note if there's nothing else worth showing - so a forwarded school
+newsletter never ends up displaying as its own quoted headers instead of
+an actual summary.
+
 ### Add to Calendar links (iPhone-friendly)
 
 Any event the AI finds - in "Good to know" or "School" - gets an "Add to

@@ -278,10 +278,13 @@ Also decide whether this email needs a personal reply from the recipient
 (ignore no-reply/notification/marketing mail, receipts, and anything that
 is purely informational).
 
-Also write `summary`: a single plain sentence describing what this email
-is actually about (e.g. "Colleague asking to confirm Thursday's 3pm
-meeting") - independent of the labelling decision, since this is shown to
-the recipient directly.
+Also write `summary`: a single plain sentence, IN YOUR OWN WORDS, describing
+what this email is actually about (e.g. "Colleague asking to confirm
+Thursday's 3pm meeting") - independent of the labelling decision, since
+this is shown to the recipient directly. Never quote or copy the raw
+"---------- Forwarded message ---------" header block, "On ... wrote:"
+reply-quote lines, timestamps, or raw email addresses from the message -
+describe the content itself, not its envelope.
 
 Email:
 Subject: {subject}
@@ -356,9 +359,13 @@ each one, if none of the labels genuinely fit, respond with best_label
 For each email also decide whether it needs a personal reply from the
 recipient (ignore no-reply/notification/marketing mail, receipts, and
 anything that is purely informational), and write `summary`: a single
-plain sentence describing what that email is actually about (e.g.
-"Colleague asking to confirm Thursday's 3pm meeting") - independent of the
-labelling decision, since this may be shown to the recipient directly.
+plain sentence, IN YOUR OWN WORDS, describing what that email is actually
+about (e.g. "Colleague asking to confirm Thursday's 3pm meeting") -
+independent of the labelling decision, since this may be shown to the
+recipient directly. Never quote or copy the raw "---------- Forwarded
+message ---------" header block, "On ... wrote:" reply-quote lines,
+timestamps, or raw email addresses from the message - describe the
+content itself, not its envelope.
 
 Return exactly one entry in `results` for every [ref] below, each carrying
 its own `ref` value unchanged so it can be matched back up.
@@ -456,7 +463,11 @@ Body: {body[:4000]}
         prompt = f"""Below are emails reviewed in one mailbox sweep, each tagged with a
 [ref] id. Pick the {top_n} MOST IMPORTANT ones overall (skip routine
 notifications/marketing/automated mail unless genuinely important) and
-for each write a 1-2 sentence summary.
+for each write a 1-2 sentence summary, IN YOUR OWN WORDS, describing what
+it's actually about. Never quote or copy a "---------- Forwarded message
+---------" header block, "On ... wrote:" reply-quote lines, timestamps, or
+raw email addresses into the summary - describe the content itself, not
+its envelope, and keep it short and plain.
 
 Only set is_event true for a genuine scheduled occurrence the reader would
 actually attend, turn up to, or participate in at a specific date/time -

@@ -4,7 +4,9 @@ is exactly one implementation of the logic described in the project spec.
 """
 from __future__ import annotations
 
+import html
 import logging
+import re
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -81,6 +83,45 @@ def _message_age_days(internal_date_ms: int, now: datetime | None = None) -> flo
     now = now or datetime.now(ZoneInfo("UTC"))
     received = datetime.fromtimestamp(internal_date_ms / 1000, tz=ZoneInfo("UTC"))
     return (now - received).total_seconds() / 86400.0
+
+
+_FORWARD_MARKER_RE = re.compile(r'^[-_]{2,}\s*(forwarded message|original message)\s*[-_]*$', re.IGNORECASE)
+_REPLY_QUOTE_RE = re.compile(r'^on .{0,120}wrote:\s*$', re.IGNORECASE)
+_HEADER_LINE_RE = re.compile(r'^(from|to|cc|bcc|date|sent|subject|reply-to):', re.IGNORECASE)
+
+
+def _clean_excerpt(text: str, max_chars: int = 200) -> str:
+    """Strips forwarded-message/reply-quote boilerplate (the "----------
+    Forwarded message ---------" block Gmail inserts, its From/Date/
+    Subject/To header lines, and "On <date>, <person> wrote:" reply
+    quotes) before taking a short plain-text excerpt. Used anywhere a raw
+    Gmail snippet/body would otherwise stand in for a real summary, so a
+    forwarded school email's quoted header block (sender name, timestamp,
+    raw email address) never ends up shown as if it were one (Joe: "just
+    a small summary only not all this junk like date time, email
+    addresses"). `html.unescape` runs first because a forwarded
+    plain-text body sometimes carries literal HTML entities (e.g.
+    "&lt;name@example.com&gt;") baked in by whatever mail client built
+    the forward. Returns "" if nothing meaningful is left once the
+    boilerplate is stripped, so the caller can fall back to something
+    else rather than show an empty/junk box."""
+    text = html.unescape(text or "")
+    lines = text.splitlines()
+    start = 0
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if _FORWARD_MARKER_RE.match(stripped) or _REPLY_QUOTE_RE.match(stripped):
+            start = i + 1
+            while start < len(lines) and (not lines[start].strip() or _HEADER_LINE_RE.match(lines[start].strip())):
+                start += 1
+            break
+    remainder = " ".join(" ".join(lines[start:]).split())
+    if not remainder:
+        return ""
+    if len(remainder) <= max_chars:
+        return remainder
+    cut = remainder[:max_chars].rsplit(" ", 1)[0]
+    return (cut or remainder[:max_chars]).rstrip(",.;: ") + "…"
 
 
 def _build_calendar_link(
@@ -251,7 +292,7 @@ def run_account(account: dict, bootstrap: BootstrapConfig, settings: dict, ai: A
             "ref": ref,
             "subject": msg.subject,
             "sender": msg.sender,
-            "summary": ai_result.get("summary") or msg.snippet,
+            "summary": ai_result.get("summary") or _clean_excerpt(msg.body_text) or "Open in Gmail to see the full message.",
             "reply_gist": reply_gist,
             "draft_link": draft_link,
         })
@@ -504,16 +545,20 @@ def run_account(account: dict, bootstrap: BootstrapConfig, settings: dict, ai: A
             reused = all_reviewed.get(f"inbox_{mid}") or all_reviewed.get(f"folder_{mid}")
             if reused:
                 subject, sender, body, gmail_link = reused["subject"], reused["sender"], reused["body"], reused.get("gmail_link")
-                snippet = body[:200]
             else:
                 try:
                     msg = gmail.get_message(mid)
                 except Exception:
                     log.exception("%s: failed to fetch School candidate %s, skipping", address, mid)
                     continue
-                subject, sender, body, gmail_link, snippet = msg.subject, msg.sender, msg.body_text, msg.permalink(), msg.snippet
+                subject, sender, body, gmail_link = msg.subject, msg.sender, msg.body_text, msg.permalink()
             ref = f"school_{mid}"
-            school_lookup[ref] = {"subject": subject, "sender": sender, "gmail_link": gmail_link, "snippet": snippet}
+            # `body` is kept (not just a snippet) so a ranking failure below
+            # can still build a clean, junk-free fallback excerpt from it
+            # rather than falling back to Gmail's own raw snippet, which for
+            # a forwarded email is often just its quoted "---------- Forwarded
+            # message ---------" header block verbatim (see _clean_excerpt).
+            school_lookup[ref] = {"subject": subject, "sender": sender, "gmail_link": gmail_link, "body": body}
             school_candidates.append({"ref": ref, "subject": subject, "sender": sender, "body": body})
 
         if school_candidates:
@@ -532,7 +577,8 @@ def run_account(account: dict, bootstrap: BootstrapConfig, settings: dict, ai: A
                     base = school_lookup[c["ref"]]
                     school_items.append({
                         "subject": base["subject"], "sender": base["sender"], "gmail_link": base.get("gmail_link"),
-                        "summary": base["snippet"], "is_event": False,
+                        "summary": _clean_excerpt(base["body"]) or "Open in Gmail to see the full message.",
+                        "is_event": False,
                     })
 
     # ---- 4. Build + send digest -----------------------------------------------------------
