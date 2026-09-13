@@ -216,10 +216,20 @@ def run_account(account: dict, bootstrap: BootstrapConfig, settings: dict, ai: A
     sorted_items: list[dict] = []
     unmatched_items: list[dict] = []
     all_reviewed: dict[str, dict] = {}  # ref -> {subject, sender, body, gmail_link, exclude_from_good_to_know}
+    # Joe: "if something appears once across the needs a reply, good to know
+    # and school it is only displayed once across all three, the priority
+    # should be for potential replies then everything else can be populated
+    # below" - refs of every message that actually lands in "Needs a reply"
+    # (decided here, before Good to know/School are built further down), so
+    # those two sections can exclude them and never show the same email
+    # twice. School vs. Good to know was already mutually exclusive before
+    # this (via exclude_from_good_to_know) - this closes the remaining gap.
+    needs_reply_refs: set[str] = set()
 
-    def maybe_flag_needs_reply(msg, ai_result: dict) -> None:
+    def maybe_flag_needs_reply(ref: str, msg, ai_result: dict) -> None:
         if not ai_result.get("needs_reply"):
             return
+        needs_reply_refs.add(ref)
         draft_link = None
         reply_gist = ""
         existing = gmail.has_existing_draft_for_thread(msg.thread_id)
@@ -238,6 +248,7 @@ def run_account(account: dict, bootstrap: BootstrapConfig, settings: dict, ai: A
             except Exception:
                 log.exception("%s: failed to create draft for message %s", address, msg.id)
         needs_reply_items.append({
+            "ref": ref,
             "subject": msg.subject,
             "sender": msg.sender,
             "summary": ai_result.get("summary") or msg.snippet,
@@ -353,7 +364,7 @@ def run_account(account: dict, bootstrap: BootstrapConfig, settings: dict, ai: A
                 "reason": reason, "gmail_link": msg.permalink(),
             })
 
-        maybe_flag_needs_reply(msg, result)
+        maybe_flag_needs_reply(ref, msg, result)
 
     # ---- 2. Sweep other labelled folders for new mail -----------------------------------------------------------
     # Daily accounts only need unread mail here (this same folder was fully
@@ -419,14 +430,20 @@ def run_account(account: dict, bootstrap: BootstrapConfig, settings: dict, ai: A
             gmail.mark_read(msg.id)
         except Exception:
             log.exception("%s: failed to mark folder message %s as read", address, msg.id)
-        maybe_flag_needs_reply(msg, result)
+        maybe_flag_needs_reply(ref, msg, result)
 
     # ---- 3. Top 5 important + event detection ("Good to know") -----------------------------------------------------------
     # School-section candidates are left out of this ranking pool entirely -
     # they get their own dedicated section below, so there's no duplication
     # between the two and no risk of the general ranking outranking them
-    # into a worse/duplicate slot.
-    good_to_know_pool = [v for v in all_reviewed.values() if not v.get("exclude_from_good_to_know")]
+    # into a worse/duplicate slot. Anything already shown in "Needs a
+    # reply" is left out too - Joe wants each email shown once across all
+    # three sections, with Needs a reply taking priority since it's already
+    # been decided by this point in the run.
+    good_to_know_pool = [
+        v for v in all_reviewed.values()
+        if not v.get("exclude_from_good_to_know") and v["ref"] not in needs_reply_refs
+    ]
     top_picks = []
     if good_to_know_pool:
         try:
@@ -474,6 +491,14 @@ def run_account(account: dict, bootstrap: BootstrapConfig, settings: dict, ai: A
         school_candidates = []
         school_lookup: dict[str, dict] = {}
         for mid in candidate_ids:
+            # Already shown in "Needs a reply" - skip it here too, same
+            # one-appearance-across-all-three-sections rule as Good to know
+            # above. Only ever true for a candidate that was also part of
+            # this run's inbox/folder review (a School-only fetch, below,
+            # is never classified/checked for needs-reply in the first
+            # place, so it can't be in this set).
+            if f"inbox_{mid}" in needs_reply_refs or f"folder_{mid}" in needs_reply_refs:
+                continue
             # Reuse data already fetched above (inbox/folder sweep) where
             # possible, to avoid a redundant Gmail fetch for the same email.
             reused = all_reviewed.get(f"inbox_{mid}") or all_reviewed.get(f"folder_{mid}")

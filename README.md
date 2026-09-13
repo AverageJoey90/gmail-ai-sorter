@@ -29,10 +29,14 @@ NAS, no `.env` file to hunt for.
    it, and marks it read.
 3. Flags anything that needs a personal reply. For each one, it checks
    Gmail for an existing draft on that thread first (never creates a
-   duplicate); if none exists, it drafts a reply for you.
+   duplicate); if none exists, it drafts a reply for you. This is decided
+   before steps 4 and 5 below, and takes priority: an email that needs a
+   reply is only ever shown in "Needs a reply", never repeated further down
+   in "Good to know" or "School" too (see "Each email appears once" below).
 4. Picks the 5 most important emails from everything reviewed (excluding
-   anything that went to the School section below, so nothing shows up
-   twice) and summarises them. If one describes a dated event, the digest
+   anything already flagged as needing a reply in step 3, or anything that
+   went to the School section below, so nothing shows up twice) and
+   summarises them. If one describes a dated event, the digest
    includes a real "Add to Calendar" link - tapping it opens the native
    calendar app on whatever device you're reading the digest on (iPhone's
    Calendar included), rather than a Google-Calendar-specific web page.
@@ -50,7 +54,9 @@ NAS, no `.env` file to hunt for.
    read or re-labelled just for showing up here. How far back it looks is
    its own setting (`school_lookback_days`, default 14) and doesn't change
    with the daily/weekly setting below - a weekly account still gets the
-   same School lookback window it's configured for.
+   same School lookback window it's configured for. Like step 4, anything
+   already flagged as needing a reply is skipped here too - see "Each email
+   appears once" below.
 6. Emails you (or whoever you set as the recipient) one HTML digest with:
    boxed counts up top, **Needs a reply** (with draft links), **Good to
    know** (top 5 + calendar links), **School** (top 3 + calendar links),
@@ -91,6 +97,24 @@ never changes what you see as read/unread in your inbox - only whether a
 label gets applied yet. A held email shows up in the "Inbox — no good label
 match" section with a note explaining it's just waiting out its grace
 period, not that no label was found for it.
+
+### Each email appears once, across the whole digest
+
+An email only ever shows up in **one** of "Needs a reply", "Good to know",
+or "School" in a given digest - never in more than one, so you're not
+re-reading the same summary twice. "Needs a reply" is decided first (during
+the inbox sort and the folder sweep) and always wins: if an email needs a
+reply, that's where it's shown, with its draft link, full stop. "Good to
+know" and "School" are then built afterwards only from whatever's left over
+- an email that needed a reply is simply left out of both, rather than also
+being ranked into one of them. School and Good to know were already
+mutually exclusive of each other before this (a School-eligible email never
+competed for a Good to know slot either), so between all three sections the
+priority order is: Needs a reply first, then School, then Good to know from
+what remains. This only affects which of the three summary sections an
+email appears in - it's still counted once toward "reviewed", and if it was
+successfully labelled it still shows up as normal in the separate "Sorted"
+table further down.
 
 ### Add to Calendar links (iPhone-friendly)
 
