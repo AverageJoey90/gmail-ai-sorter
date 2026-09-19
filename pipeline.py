@@ -43,9 +43,18 @@ HOLD_UNREAD_GRACE_DAYS = 7
 # out to be "INBOX/Weekly Digest", not just "Weekly Digest") - this
 # constant is only the seed default for a fresh settings.json.
 DEFAULT_WEEKLY_DIGEST_LABEL_NAME = "Weekly Digest"
-# Shared between building the real subject line (below) and searching for
-# past ones (_archive_old_digests), so the two can never drift apart.
-DIGEST_SUBJECT_PREFIX_TEMPLATE = "Gmail daily digest - {address} - "
+# The actual subject line sent, with {frequency} filled in from the
+# account's own daily/weekly setting (Joe: the subject always said "Gmail
+# daily digest" even for a weekly-configured account - a real bug, now
+# fixed - see run_account below).
+DIGEST_SUBJECT_PREFIX_TEMPLATE = "Gmail {frequency} digest - {address} - "
+# Used only to SEARCH for past digests (_archive_old_digests) - deliberately
+# frequency-agnostic (no "daily"/"weekly" word) so it still finds every past
+# digest regardless of which wording was used at the time: every digest
+# this app has ever sent (including every one sent before the subject-line
+# fix above existed, which all said "daily" unconditionally) contains this
+# exact substring.
+DIGEST_SUBJECT_SEARCH_ANCHOR = "digest - {address} - "
 
 # How many emails go into one classify_emails_batch() Gemini call instead
 # of one call each - see ai_client.py. Kept modest rather than as large as
@@ -171,9 +180,9 @@ def _archive_old_digests(gmail: GmailClient, address: str, label_name: str) -> i
     except Exception:
         log.exception("%s: failed to get/create the '%s' label, skipping digest cleanup this run", address, label_name)
         return 0
-    prefix = DIGEST_SUBJECT_PREFIX_TEMPLATE.format(address=address)
+    anchor = DIGEST_SUBJECT_SEARCH_ANCHOR.format(address=address)
     try:
-        ids = gmail.search_message_ids(f'in:inbox subject:"{prefix}"', max_results=50)
+        ids = gmail.search_message_ids(f'in:inbox subject:"{anchor}"', max_results=50)
     except Exception:
         log.exception("%s: failed searching for old digest emails, skipping cleanup this run", address)
         return 0
@@ -343,6 +352,15 @@ def run_account(account: dict, bootstrap: BootstrapConfig, settings: dict, ai: A
             log.warning("%s: no classification result for inbox message %s, leaving in inbox", address, msg_id)
             unmatched_items.append({
                 "subject": msg.subject, "sender": msg.sender,
+                # No AI result at all here (the whole batch call failed), so
+                # there's no AI-written summary to use - fall back to a
+                # clean excerpt of the email itself rather than showing a
+                # bare technical error where a summary should be (Joe: "I
+                # am seeing a lot of 'Classification failed'... where
+                # simple summaries should be"). "reason" is kept too, for
+                # the container logs/troubleshooting - it's just not what's
+                # shown as the digest's "Summary" column any more.
+                "summary": _clean_excerpt(msg.body_text) or "Open in Gmail to see the full message.",
                 "reason": "Classification failed - see container logs.", "gmail_link": msg.permalink(),
             })
             continue
@@ -362,12 +380,17 @@ def run_account(account: dict, bootstrap: BootstrapConfig, settings: dict, ai: A
             # fully processed above (all_reviewed / Good to know / School
             # eligibility, and maybe_flag_needs_reply below still runs), so
             # nothing about that is skipped - only the label-apply step is.
+            held_reason = (
+                f"Unread and within its {HOLD_UNREAD_GRACE_DAYS}-day grace period - "
+                f"would be labelled \"{result['label']}\" once read or after {HOLD_UNREAD_GRACE_DAYS} days."
+            )
             unmatched_items.append({
                 "subject": msg.subject, "sender": msg.sender,
-                "reason": (
-                    f"Unread and within its {HOLD_UNREAD_GRACE_DAYS}-day grace period - "
-                    f"would be labelled \"{result['label']}\" once read or after {HOLD_UNREAD_GRACE_DAYS} days."
-                ),
+                # This explanatory note IS the most useful thing to show
+                # here (Joe confirmed this in round 20) - shown as-is,
+                # unlike the two failure cases below which get a real
+                # content summary instead of their technical reason text.
+                "summary": held_reason, "reason": held_reason,
                 "gmail_link": msg.permalink(),
             })
             try:
@@ -396,12 +419,23 @@ def run_account(account: dict, bootstrap: BootstrapConfig, settings: dict, ai: A
                 log.exception("%s: failed to apply label to %s", address, msg_id)
                 unmatched_items.append({
                     "subject": msg.subject, "sender": msg.sender,
+                    # Classification itself succeeded here (only the Gmail
+                    # label-apply call failed), so the AI's own summary is
+                    # available - prefer it, same reasoning as the
+                    # classification-failure case above.
+                    "summary": result.get("summary") or _clean_excerpt(msg.body_text) or "Open in Gmail to see the full message.",
                     "reason": "Label apply failed - see container logs.", "gmail_link": msg.permalink(),
                 })
         else:
             reason = result.get("reasoning") or "No existing label was a confident match."
             unmatched_items.append({
                 "subject": msg.subject, "sender": msg.sender,
+                # Prefer the AI's own plain-English summary of the email
+                # over its labelling `reasoning` here - "reasoning" explains
+                # the labelling decision (e.g. "doesn't match any existing
+                # label pattern"), which isn't a summary of the email
+                # itself and reads oddly in a "Summary" column.
+                "summary": result.get("summary") or _clean_excerpt(msg.body_text) or reason,
                 "reason": reason, "gmail_link": msg.permalink(),
             })
 
@@ -596,10 +630,11 @@ def run_account(account: dict, bootstrap: BootstrapConfig, settings: dict, ai: A
         unmatched_items=unmatched_items,
         timezone=tz,
         date_label=now.strftime("%-d %B %Y"),
+        frequency=frequency,
     )
     html_body = build_digest_html(digest)
     today = now.strftime("%Y-%m-%d")
-    subject = DIGEST_SUBJECT_PREFIX_TEMPLATE.format(address=address) + today
+    subject = DIGEST_SUBJECT_PREFIX_TEMPLATE.format(frequency=frequency, address=address) + today
     gmail.send_html_email(recipient, subject, html_body, address)
     log.info("%s: digest sent to %s", address, recipient)
 

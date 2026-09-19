@@ -79,6 +79,11 @@ reminder feature, not part of the sort/triage sweep, so its own lookback
 window (`school_lookback_days` in Settings) stays whatever you've set it
 to regardless of daily/weekly or which day is chosen.
 
+The digest itself reflects whichever of the two an account is set to as
+well: its email subject line says "Gmail daily digest" or "Gmail weekly
+digest", and the on-page heading says "Daily summary" or "Weekly summary"
+- both follow that account's own setting, not a fixed "daily" wording.
+
 ### Leave unread emails in the inbox for 7 days before labelling
 
 Each account's card has a **"Leave unread emails in inbox for 7 days before
@@ -128,6 +133,14 @@ falling back further to a plain "Open in Gmail to see the full message."
 note if there's nothing else worth showing - so a forwarded school
 newsletter never ends up displaying as its own quoted headers instead of
 an actual summary.
+
+The same applies to "Good to know" and "Inbox — no good label match": if a
+whole batch of emails fails to classify (a rate limit, a temporary Gemini
+outage), or a label is chosen but Gmail's own label-apply call fails, the
+"Summary" column shows a real, short description of the email rather than
+a technical status line like "Classification failed - see container
+logs." (that detail is still written to the container logs for
+troubleshooting - it's just not shown where a summary belongs).
 
 ### Add to Calendar links (iPhone-friendly)
 

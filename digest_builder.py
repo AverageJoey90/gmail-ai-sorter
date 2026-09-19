@@ -87,9 +87,10 @@ class DigestData:
     top_important: list[dict] = field(default_factory=list)          # {subject, sender, summary, calendar_link, gmail_link}
     school_items: list[dict] = field(default_factory=list)           # {subject, sender, summary, calendar_link, gmail_link}
     sorted_items: list[dict] = field(default_factory=list)           # {subject, sender, label, gmail_link}
-    unmatched_items: list[dict] = field(default_factory=list)        # {subject, sender, reason, gmail_link}
+    unmatched_items: list[dict] = field(default_factory=list)        # {subject, sender, summary, reason, gmail_link}
     timezone: str = "Europe/London"
     date_label: str = ""
+    frequency: str = "daily"  # this account's own daily/weekly setting - drives the header title below
 
 
 def _esc(s: str) -> str:
@@ -125,7 +126,11 @@ def _fallback_good_to_know(d: DigestData, limit: int = 5) -> list[dict]:
         items.append({
             "subject": it["subject"],
             "sender": it["sender"],
-            "summary": it.get("reason") or "Left in the inbox - no confident label match.",
+            # `summary` (not the older `reason`) - pipeline.py always fills
+            # this with a real, clean description now, never a bare
+            # technical failure string like "Classification failed - see
+            # container logs." (Joe reported that leaking through here).
+            "summary": it.get("summary") or "Left in the inbox - no confident label match.",
             "gmail_link": it.get("gmail_link"),
         })
     return items[:limit]
@@ -161,9 +166,11 @@ def _render_items(items: list[dict], variant: str = "good") -> str:
 def build_digest_html(d: DigestData) -> str:
     parts = [f"<html><head><meta charset='utf-8'><style>{STYLE}</style></head><body><div class='wrap'>"]
 
-    # Header
+    # Header - title reflects this account's own daily/weekly setting (used
+    # to always say "Daily summary" even for a weekly-configured account).
+    title = "Weekly summary" if d.frequency == "weekly" else "Daily summary"
     parts.append('<div class="header"><div class="eyebrow">Inbox digest</div>')
-    parts.append('<div class="row"><div class="title">Daily summary</div>')
+    parts.append(f'<div class="row"><div class="title">{_esc(title)}</div>')
     parts.append(f'<div class="date">{_esc(d.date_label)}</div></div></div>')
 
     parts.append('<div class="content">')
@@ -233,7 +240,7 @@ def build_digest_html(d: DigestData) -> str:
             parts.append(
                 "<tr>"
                 f'<td>{_esc(item["subject"])}</td>'
-                f'<td>{_esc(item.get("reason", "No confident label match."))}</td>'
+                f'<td>{_esc(item.get("summary") or item.get("reason", "No confident label match."))}</td>'
                 "</tr>"
             )
         parts.append("</tbody></table>")
