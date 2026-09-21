@@ -515,9 +515,9 @@ def create_app(bootstrap_store: BootstrapStore, store: SettingsStore) -> Flask:
             settings = store.get_settings()
             try:
                 summary = pipeline.run_account(account, cfg, settings, ai)
-            except Exception:
+            except Exception as exc:
                 log.exception("Manual run failed for %s", account["address"])
-                summary = {"ok": False, "error": "Run failed - see container logs."}
+                summary = {"ok": False, "error": pipeline.describe_run_exception(exc)}
             store.record_run_result(index, summary)
 
         threading.Thread(target=_run, daemon=True).start()

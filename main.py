@@ -140,9 +140,9 @@ def scheduler_loop(bootstrap_store: BootstrapStore, store: SettingsStore) -> Non
                 ai = AiClient(pipeline.resolve_gemini_api_key(account, bootstrap), bootstrap.gemini_model)
                 try:
                     summary = pipeline.run_account(account, bootstrap, settings, ai)
-                except Exception:
+                except Exception as exc:
                     log.exception("Scheduled run failed for %s", account["address"])
-                    summary = {"ok": False, "error": "Run failed - see container logs."}
+                    summary = {"ok": False, "error": pipeline.describe_run_exception(exc)}
                 store.record_run_result(account["index"], summary)
                 state.mark_ran_today(account["address"], today_str)
         except Exception:

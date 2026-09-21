@@ -338,11 +338,28 @@ without changing any code:
    one) - e.g. "gmail-ai-sorter".
 2. **APIs & Services > Library**: search for "Gmail API" and enable it.
 3. **APIs & Services > OAuth consent screen**: choose "External", fill in
-   the required fields (app name, your email). Leave it in "Testing"
-   status - you don't need Google's review for personal use. Under "Test
-   users", add every Gmail address you plan to connect (Google restricts
-   sign-in to listed test users while a consent screen is in Testing
-   status).
+   the required fields (app name, your email). Under "Test users", add
+   every Gmail address you plan to connect (Google restricts sign-in to
+   listed test users while a consent screen is in Testing status).
+
+   **Then publish the app: APIs & Services > OAuth consent screen >
+   "Publish app" (or "Manage app audience" > move to "In production" on
+   newer Cloud console layouts).** Leaving it in "Testing" is what the
+   original build notes suggested (and it does work at first), but Google
+   caps every token issued in Testing status at 7 days - regardless of how
+   often the app actually uses it - so roughly a week after connecting an
+   account, every Gmail API call for it starts failing with
+   `google.auth.exceptions.RefreshError: invalid_grant: Token has been
+   expired or revoked.` (that account's entire run fails - not just its
+   digest content). Publishing to production removes that 7-day cap. For
+   just the two Gmail addresses you're using here you won't need to go
+   through Google's verification process to do this - you'll see an
+   "unverified app" warning the next time you connect an account (click
+   "Advanced" > "Go to (app name)" to continue past it), but the app
+   itself keeps working exactly the same. If an account is already stuck
+   with an expired token, publishing to production doesn't retroactively
+   fix its existing token - disconnect and reconnect that one account
+   afterwards (see "Known caveats" below).
 4. **APIs & Services > Credentials > Create Credentials > OAuth client
    ID**. Application type: **Web application** (not Desktop app - the
    in-app connect flow needs a proper redirect URI).
@@ -703,6 +720,16 @@ only connecting a *new* Gmail account needs the public HTTPS URL.
 - **Internet exposure**: the dashboard is reachable from the public
   internet once `PUBLIC_BASE_URL` is live. It's password-gated, but treat
   that password like any other credential - long, random, not reused.
+- **"This account's Gmail connection has expired" on a dashboard card**
+  means Google rejected that account's stored token
+  (`invalid_grant: Token has been expired or revoked.`) - every API call
+  for it fails, not just the digest. Fix it from the dashboard: click
+  Disconnect on that account, then "+ Connect a Gmail account" and sign
+  in again. If it keeps happening every few days, your Google Cloud
+  project's OAuth consent screen is still in "Testing" status - see
+  section 2 above for how to publish it to production, which is the
+  permanent fix. (An unrelated failure still shows the plain "Run failed -
+  see container logs." message, same as always.)
 - **Relationship to the existing Cowork digest**: leave that scheduled
   task running until you've confirmed this one works reliably for a few
   days, then let me know and I'll turn the Cowork one off so you're not

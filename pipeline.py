@@ -10,6 +10,8 @@ import re
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+from google.auth.exceptions import RefreshError
+
 from ai_client import AiClient
 from config import BootstrapConfig
 from digest_builder import DigestData, build_digest_html
@@ -647,6 +649,34 @@ def run_account(account: dict, bootstrap: BootstrapConfig, settings: dict, ai: A
     }
 
 
+def describe_run_exception(exc: Exception) -> str:
+    """Turns an exception that ended a run into the message shown on that
+    account's dashboard card (SettingsStore.record_run_result -> the "Last
+    run failed: ..." line in web_app.py). "Run failed - see container logs."
+    is the honest answer for most failures - they're too varied to explain
+    usefully without the logs - but Joe hit one specific, recurring cause
+    often enough (a Gmail account's stored OAuth token being rejected by
+    Google, usually because the Google Cloud project's OAuth consent screen
+    is still in "Testing" mode, where Google caps refresh tokens at 7 days
+    regardless of use) that it's worth naming directly and telling him
+    exactly how to fix it himself from this same page, instead of sending
+    him to the logs for something the dashboard can just say outright."""
+    if isinstance(exc, RefreshError) and "invalid_grant" in str(exc):
+        return (
+            "This account's Gmail connection has expired - disconnect it "
+            "below, then reconnect it with “+ Connect a Gmail account” "
+            "to fix this. If it keeps happening every few days, your Google "
+            "Cloud project's OAuth consent screen is probably still set to "
+            "“Testing”, which Google limits to 7-day tokens no matter "
+            "how often they're used - switching it to “In production” "
+            "(Google Cloud Console → APIs & Services → OAuth consent "
+            "screen → Publish app) stops this recurring, and shouldn't "
+            "need Google's verification for just a couple of users. See the "
+            "README for details."
+        )
+    return "Run failed - see container logs."
+
+
 def run_all(bootstrap: BootstrapConfig, settings_store: SettingsStore) -> None:
     """Runs every connected account once, recording results as it goes.
     A failure on one account is logged and recorded, never allowed to stop
@@ -665,7 +695,7 @@ def run_all(bootstrap: BootstrapConfig, settings_store: SettingsStore) -> None:
         try:
             ai = AiClient(resolve_gemini_api_key(account, bootstrap), bootstrap.gemini_model)
             summary = run_account(account, bootstrap, settings, ai)
-        except Exception:
+        except Exception as exc:
             log.exception("Run failed for %s", account.get("address"))
-            summary = {"ok": False, "error": "Run failed - see container logs."}
+            summary = {"ok": False, "error": describe_run_exception(exc)}
         settings_store.record_run_result(account["index"], summary)
