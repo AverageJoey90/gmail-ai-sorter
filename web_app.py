@@ -90,7 +90,7 @@ def create_app(bootstrap_store: BootstrapStore, store: SettingsStore) -> Flask:
     # ---- setup gate: nothing else works until the 5 required fields are set ---
     @app.before_request
     def require_setup():
-        if request.endpoint in ("setup_form", "setup_submit", "serve_ics", "static"):
+        if request.endpoint in ("setup_form", "setup_submit", "serve_ics", "ics_landing", "static"):
             return None
         if not is_bootstrap_complete(g.bootstrap):
             return redirect(url_for("setup_form"))
@@ -99,7 +99,9 @@ def create_app(bootstrap_store: BootstrapStore, store: SettingsStore) -> Flask:
     # ---- auth gate -----------------------------------------------------------
     @app.before_request
     def require_login():
-        if request.endpoint in ("login_form", "login_submit", "setup_form", "setup_submit", "serve_ics", "static"):
+        if request.endpoint in (
+            "login_form", "login_submit", "setup_form", "setup_submit", "serve_ics", "ics_landing", "static",
+        ):
             return None
         if not session.get("authed"):
             return redirect(url_for("login_form"))
@@ -530,14 +532,60 @@ def create_app(bootstrap_store: BootstrapStore, store: SettingsStore) -> Flask:
         return redirect(url_for("dashboard", flash="Run started for all accounts - refresh in a minute or two for results."))
 
     # ---- calendar event links -----------------------------------------------------------
-    # Deliberately exempt from login/setup below: this is the link a digest
-    # email's "Add to Calendar" button points at, opened straight from
-    # whatever mail/browser app the recipient is using (often not logged
-    # into this dashboard at all) - tapping it needs to just work. The
-    # token is an unguessable UUID4, so this has the same practical
-    # exposure as the older calendar.google.com link it replaced (which put
-    # the event details directly in a public URL instead of behind a
-    # token) - see ics_store.py.
+    # Deliberately exempt from login/setup below: `ics_landing` is the link a
+    # digest email's "Add to Calendar" button actually points at now (round
+    # 28), opened straight from whatever mail/browser app the recipient is
+    # using (often not logged into this dashboard at all) - tapping it needs
+    # to just work. `serve_ics` (the raw .ics file itself) is what
+    # ics_landing's own "Add to Calendar" button links to underneath - both
+    # are exempt for the same reason. The token is an unguessable UUID4, so
+    # this has the same practical exposure as the older calendar.google.com
+    # link it replaced (which put the event details directly in a public
+    # URL instead of behind a token) - see ics_store.py.
+    @app.get("/ics/<token>")
+    def ics_landing(token: str):
+        """A small, phone-friendly page shown *before* the raw .ics file -
+        added in round 28 after Joe's real iPhone testing showed tapping the
+        raw file link straight from an email could still make Apple
+        Calendar offer to "subscribe" rather than add the one-off event,
+        and Apple doesn't publicly document the exact rule that decides
+        which one happens (see ics_builder.py's module docstring for what
+        was already tried). This page shows the event's actual title/time/
+        location in plain text - so that information is always visible
+        regardless of what tapping the button below does - with an explicit
+        "Add to Calendar" button underneath pointing at the same
+        `serve_ics` route as before."""
+        ics_store = IcsStore(g.bootstrap.data_dir)
+        if ics_store.read_event(token) is None:
+            return ("This calendar link has expired or wasn't found.", 404)
+        meta = ics_store.read_meta(token) or {}
+        rows = [f'<div class="cal-title">{_esc(meta.get("title") or "Event")}</div>']
+        if meta.get("start_display"):
+            rows.append(f'<div class="cal-row">{_esc(meta["start_display"])}</div>')
+        if meta.get("location"):
+            rows.append(f'<div class="cal-row">{_esc(meta["location"])}</div>')
+        ics_url = url_for("serve_ics", token=token)
+        return f"""<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Add to Calendar</title>
+<style>
+body{{font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#1a1a1a;
+background:#f5f5f5;margin:0;padding:32px 16px;text-align:center}}
+.wrap{{max-width:420px;margin:0 auto}}
+.card{{background:#fff;border:1px solid #e5e5e5;border-radius:12px;padding:24px 20px;margin-bottom:16px}}
+.cal-title{{font-size:19px;font-weight:600;margin-bottom:10px}}
+.cal-row{{font-size:16px;color:#333;margin-bottom:4px}}
+.btn-cal{{display:inline-block;padding:14px 28px;background:#1a56db;color:#fff;
+text-decoration:none;border-radius:8px;font-size:16px;font-weight:600;margin-top:14px}}
+.hint{{color:#666;font-size:13px;line-height:1.5}}
+</style></head><body><div class="wrap">
+<div class="card">{"".join(rows)}<div><a class="btn-cal" href="{_esc(ics_url)}">Add to Calendar &rarr;</a></div></div>
+<div class="hint">If your Calendar app offers to "Subscribe" rather than add this one event,
+the details above are the full event, so you can still add it by hand -
+and it's worth trying the button again after opening this page in your
+phone's own browser rather than inside another app's built-in viewer.</div>
+</div></body></html>"""
+
     @app.get("/ics/<token>.ics")
     def serve_ics(token: str):
         ics_store = IcsStore(g.bootstrap.data_dir)

@@ -145,20 +145,20 @@ troubleshooting - it's just not shown where a summary belongs).
 ### Add to Calendar links (iPhone-friendly)
 
 Any event the AI finds - in "Good to know" or "School" - gets an "Add to
-Calendar" link built from a real `.ics` file rather than a
+Calendar" link. It's built from a real `.ics` file rather than a
 `calendar.google.com` web link (what earlier versions of this project
-used). The dashboard serves that `.ics` file from a small, unauthenticated
-`/ics/<token>` link - deliberately reachable without logging into the
-dashboard first, since the person tapping it is reading an email, not
-using the dashboard. Tapping it opens the native "Add to Calendar" sheet
-on the device you're reading it on: Apple's Calendar app on iPhone/iPad/
-Mac, or whatever calendar app is registered on Android/desktop. The token
-in the link is an unguessable random ID (not sequential, not derived from
+used), so tapping it opens the native calendar app on the device you're
+reading it on: Apple's Calendar app on iPhone/iPad/Mac, or whatever
+calendar app is registered on Android/desktop. The link itself, and the
+`.ics` file it points to, are both small, unauthenticated `/ics/<token>`
+routes on the dashboard - deliberately reachable without logging in first,
+since the person tapping it is reading an email, not using the dashboard.
+The token is an unguessable random ID (not sequential, not derived from
 anything else) - anyone who has that exact link can see that one event's
-title/time/location, which is the same practical exposure as the old
-Google Calendar link already had (it put those same details directly in
-a public URL). Event files are kept for 90 days and cleaned up
-automatically after that.
+title/time/location, which is the same practical exposure the old Google
+Calendar link already had (it put those same details directly in a public
+URL). Event files are kept for 90 days and cleaned up automatically after
+that.
 
 Only a genuine scheduled occurrence you'd actually attend - a meeting,
 appointment, reservation, class, or similar - gets flagged as an event in
@@ -167,10 +167,21 @@ with nothing to attend is deliberately left out, even though it has a date
 attached. When it is a real event, the .ics file is built as an actual
 one-off *invitation* - `METHOD:REQUEST` with a real organizer (the Gmail
 account) and attendee (whoever the digest was sent to) - rather than a bare
-announcement, and served with both a matching `method=` parameter on the
-Content-Type header and a `Content-Disposition: attachment` header. That
-combination is specifically what makes tapping the link produce a one-off
-"Add Event" prompt rather than an ongoing calendar "Subscribe" prompt.
+announcement, served with both a matching `method=` parameter on the
+Content-Type header and a `Content-Disposition: attachment` header, and
+(round 28) its start/end time is converted to a real, unambiguous UTC
+instant rather than an ambiguous "floating" local time. That combination is
+specifically what's intended to make tapping the link produce a one-off
+"Add Event" prompt rather than an ongoing calendar "Subscribe" prompt -
+Apple doesn't publicly document the exact rule that decides which one
+happens, though, and Joe's real iPhone testing found it can still go either
+way even with all of the above in place. Because of that, tapping the link
+in the digest doesn't go straight to the `.ics` file any more - it opens a
+small landing page first, showing the event's title, date/time, and
+location in plain text, with the actual "Add to Calendar" button
+underneath. That way the event details are always visible and usable even
+on a device/app combination where the one-tap "Add Event" behaviour doesn't
+trigger.
 
 ### Handling Gemini's rate limits efficiently
 

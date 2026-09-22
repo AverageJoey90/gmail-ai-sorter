@@ -29,15 +29,57 @@ METHOD-less or PUBLISH-only file apparently still wasn't for every calendar
 app that was tried. The organizer is the Gmail account doing the sorting
 (effectively "your assistant invited you"); the attendee is whoever the
 digest itself was actually sent to - see pipeline.py's call site.
+
+Round 28 (Joe: real iPhone testing on Apple Mail still showed a "subscribe"
+prompt rather than a one-off "Add Event", even with everything round 21
+already covered): found one more genuine spec gap while digging into this -
+DTSTART/DTEND were being written as "floating" local time (no "Z", no
+TZID at all), which RFC 5545 treats as an ambiguous wall-clock time with no
+real, fixed instant attached to it - not the unambiguous "this one thing
+happens at this one specific moment" a REQUEST invitation is supposed to
+describe. `build_ics` now takes the account's own timezone (`tz`, e.g.
+"Europe/London" - the same setting already used for classification/School)
+and converts a timezone-less start/end time into a real UTC instant
+(correctly handling BST/GMT) before writing it out with a proper trailing
+"Z". A start/end the AI *did* return with its own explicit offset is
+trusted and converted to UTC as-is, never re-interpreted through the
+account's timezone. Apple's exact rule for one-off-vs-subscribe still isn't
+publicly documented anywhere reliable enough to say this alone fixes it,
+which is why pipeline.py/web_app.py also added a plain-language landing
+page in front of the raw .ics link this same round - see web_app.py's
+`/ics/<token>` route.
 """
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 
 def _fmt(dt: datetime) -> str:
-    return dt.strftime("%Y%m%dT%H%M%S")
+    """Formats a datetime that's already been normalised to UTC (see
+    _to_utc) using RFC 5545's UTC form - the trailing "Z" is what makes this
+    a real, unambiguous instant rather than the "floating" local time that
+    was round 28's bug."""
+    return dt.strftime("%Y%m%dT%H%M%SZ")
+
+
+def _to_utc(dt: datetime, tz: str) -> datetime:
+    """Normalises `dt` to a real UTC instant. If `dt` already carries its
+    own offset (the AI occasionally includes one when the source email
+    stated a timezone explicitly), that's trusted and just converted.
+    Otherwise `dt` is naive/"floating" - it's localised into the account's
+    own timezone (`tz`) before converting, so e.g. a 9am London event
+    becomes the correct UTC instant whether it's during BST or GMT. Falls
+    back to treating `dt` as UTC outright if `tz` isn't a real zone name,
+    rather than losing the whole calendar link over it."""
+    if dt.tzinfo is not None:
+        return dt.astimezone(timezone.utc)
+    try:
+        zone = ZoneInfo(tz)
+    except Exception:  # noqa: BLE001 - unknown/invalid tz name; don't fail the event over it
+        zone = timezone.utc
+    return dt.replace(tzinfo=zone).astimezone(timezone.utc)
 
 
 def build_ics(
@@ -48,6 +90,7 @@ def build_ics(
     description: str = "",
     organizer_email: str = "",
     attendee_email: str = "",
+    tz: str = "UTC",
 ) -> bytes | None:
     """Returns raw .ics bytes for a one-off event *invitation*, or None if
     start_iso couldn't be parsed (caller should just omit the Add to
@@ -55,22 +98,25 @@ def build_ics(
     given, add real ORGANIZER/ATTENDEE properties and switch the calendar's
     METHOD to REQUEST - see the module docstring for why that's what
     actually makes this read as "one event to add", not a calendar to
-    subscribe to."""
+    subscribe to. `tz` (an IANA zone name, e.g. "Europe/London") is only
+    used when start_iso/end_iso don't already carry their own offset - see
+    _to_utc."""
     try:
         start = datetime.fromisoformat(start_iso)
     except (ValueError, TypeError):
         return None
+    start = _to_utc(start, tz)
 
     if end_iso:
         try:
-            end = datetime.fromisoformat(end_iso)
+            end = _to_utc(datetime.fromisoformat(end_iso), tz)
         except ValueError:
             end = start + timedelta(hours=1)
     else:
         end = start + timedelta(hours=1)
 
     uid = f"{uuid.uuid4()}@gmail-ai-sorter"
-    now = _fmt(datetime.utcnow()) + "Z"
+    now = _fmt(datetime.now(timezone.utc))
     # REQUEST is the iTIP method for "here's one occurrence, please add it
     # (and you could reply)" - it's what makes an .ics genuinely read as an
     # invitation to attend rather than an ambiguous calendar resource, which

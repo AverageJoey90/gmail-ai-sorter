@@ -135,19 +135,45 @@ def _clean_excerpt(text: str, max_chars: int = 200) -> str:
     return (cut or remainder[:max_chars]).rstrip(",.;: ") + "…"
 
 
+def _format_event_display(start_iso: str, tz: str) -> str:
+    """Human-readable "Friday 25 September 2026, 9:00am" rendering of an
+    event's start time, always shown in the account's own timezone (`tz`)
+    regardless of whether the AI's start_iso carried its own offset - used
+    only for the round-28 ics landing page (web_app.py's `/ics/<token>`
+    route), kept separate from ics_builder's own UTC conversion since that
+    one is for the calendar file itself, not for a person reading a page.
+    Returns "" if start_iso couldn't be parsed."""
+    try:
+        dt = datetime.fromisoformat(start_iso)
+    except (ValueError, TypeError):
+        return ""
+    try:
+        zone = ZoneInfo(tz)
+    except Exception:  # noqa: BLE001 - unknown/invalid tz name; fall back rather than fail
+        zone = ZoneInfo("UTC")
+    dt = dt.replace(tzinfo=zone) if dt.tzinfo is None else dt.astimezone(zone)
+    return dt.strftime("%A %-d %B %Y, %-I:%M%p").replace("AM", "am").replace("PM", "pm")
+
+
 def _build_calendar_link(
-    item: dict, ics_store: IcsStore, public_base_url: str, organizer_email: str, attendee_email: str,
+    item: dict, ics_store: IcsStore, public_base_url: str, organizer_email: str, attendee_email: str, tz: str,
 ) -> str | None:
     """If `item` (an AI-ranked "Good to know"/School entry) describes a
     dated event, builds its .ics file (as a real invitation - see
     ics_builder.py - organized by this Gmail account, addressed to whoever
-    the digest itself was sent to), saves it via `ics_store`, and returns a
-    link to the dashboard's `/ics/<token>.ics` route that serves it -
-    tapping that link is what triggers a native "Add to Calendar" prompt on
-    the device (iPhone included), since it's a real .ics file with a
-    text/calendar content type rather than a Google-Calendar-only web link.
-    Returns None (no calendar link shown) if there's no event, or its start
-    time couldn't be parsed."""
+    the digest itself was sent to), saves it (plus its display fields, for
+    the landing page below) via `ics_store`, and returns a link to the
+    dashboard's `/ics/<token>` landing page (web_app.py) rather than the raw
+    .ics file directly - round 28: Joe's real iPhone testing showed the raw
+    file link could still prompt Apple Calendar to "subscribe" rather than
+    add the one-off event, and Apple doesn't publicly document the exact
+    rule that decides which one happens, so the landing page shows the
+    event's title/time/location in plain text with an explicit "Add to
+    Calendar" button underneath (linking to the same underlying .ics file
+    as before) - always something useful on screen either way, rather than
+    a bare unexplained subscribe prompt with no fallback. Returns None (no
+    calendar link shown) if there's no event, or its start time couldn't be
+    parsed."""
     if not item.get("is_event") or not item.get("event_start"):
         return None
     ics_bytes = build_ics(
@@ -158,11 +184,17 @@ def _build_calendar_link(
         description=item.get("summary", ""),
         organizer_email=organizer_email,
         attendee_email=attendee_email,
+        tz=tz,
     )
     if not ics_bytes:
         return None
-    token = ics_store.save_event(ics_bytes)
-    return f"{public_base_url.rstrip('/')}/ics/{token}.ics"
+    token = ics_store.save_event(
+        ics_bytes,
+        title=item.get("event_title") or item.get("subject", ""),
+        start_display=_format_event_display(item["event_start"], tz),
+        location=item.get("event_location", ""),
+    )
+    return f"{public_base_url.rstrip('/')}/ics/{token}"
 
 
 def _archive_old_digests(gmail: GmailClient, address: str, label_name: str) -> int:
@@ -530,7 +562,7 @@ def run_account(account: dict, bootstrap: BootstrapConfig, settings: dict, ai: A
                 if not base:
                     continue
                 item = {**r, "subject": base["subject"], "sender": base["sender"], "gmail_link": base.get("gmail_link")}
-                item["calendar_link"] = _build_calendar_link(item, ics_store, bootstrap.public_base_url, address, recipient)
+                item["calendar_link"] = _build_calendar_link(item, ics_store, bootstrap.public_base_url, address, recipient, tz)
                 top_picks.append(item)
         except Exception:
             log.exception("%s: importance ranking failed, omitting 'Good to know' section", address)
@@ -605,7 +637,7 @@ def run_account(account: dict, bootstrap: BootstrapConfig, settings: dict, ai: A
                     if not base:
                         continue
                     item = {**r, "subject": base["subject"], "sender": base["sender"], "gmail_link": base.get("gmail_link")}
-                    item["calendar_link"] = _build_calendar_link(item, ics_store, bootstrap.public_base_url, address, recipient)
+                    item["calendar_link"] = _build_calendar_link(item, ics_store, bootstrap.public_base_url, address, recipient, tz)
                     school_items.append(item)
             except Exception:
                 log.exception("%s: School ranking failed, falling back to the most recent School emails", address)

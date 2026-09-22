@@ -12,9 +12,22 @@ instead), so the token is a full UUID4 hex string - not sequential, not
 guessable. save_event() opportunistically prunes anything past the
 retention window on every call, which is cheap enough here that a
 separate cleanup job/thread isn't worth the extra moving part.
+
+Round 28: alongside <token>.ics, save_event() now also writes a small
+<token>.json sidecar with the event's display fields (title, a
+human-readable date/time, location) - see read_meta(). This is what feeds
+web_app.py's new `/ics/<token>` landing page, added the same round: Joe's
+real iPhone testing showed the raw .ics link could still prompt Apple
+Calendar to "subscribe" rather than add a one-off event, and since Apple's
+exact rule for that isn't reliably documented anywhere, the landing page
+means the event's actual details are always visible on screen (with an
+explicit "Add to Calendar" button underneath pointing at the same
+<token>.ics as before) rather than the outcome being a silent, unexplained
+subscribe screen with no fallback.
 """
 from __future__ import annotations
 
+import json
 import time
 import uuid
 from pathlib import Path
@@ -27,11 +40,17 @@ class IcsStore:
         self._dir = Path(data_dir) / "ics"
         self._dir.mkdir(parents=True, exist_ok=True)
 
-    def save_event(self, ics_bytes: bytes) -> str:
-        """Writes the event's .ics bytes and returns a new opaque token to
-        serve it back by."""
+    def save_event(
+        self, ics_bytes: bytes, *, title: str = "", start_display: str = "", location: str = "",
+    ) -> str:
+        """Writes the event's .ics bytes (plus its display fields, if given,
+        as a JSON sidecar - see read_meta) and returns a new opaque token to
+        serve them back by."""
         token = uuid.uuid4().hex
         (self._dir / f"{token}.ics").write_bytes(ics_bytes)
+        if title or start_display or location:
+            meta = {"title": title, "start_display": start_display, "location": location}
+            (self._dir / f"{token}.json").write_text(json.dumps(meta), encoding="utf-8")
         self._prune()
         return token
 
@@ -40,12 +59,29 @@ class IcsStore:
         expired, or not a well-formed token - `token` comes straight off a
         URL path segment, so it's validated before it ever touches the
         filesystem (no path traversal via `..`/`/` etc.)."""
-        if not token or not all(c in "0123456789abcdef" for c in token):
+        if not self._valid_token(token):
             return None
         try:
             return (self._dir / f"{token}.ics").read_bytes()
         except OSError:
             return None
+
+    def read_meta(self, token: str) -> dict | None:
+        """Returns the {"title", "start_display", "location"} saved
+        alongside `token`'s .ics bytes, or None if there's no sidecar (an
+        older event saved before round 28, or a bad/missing token) - the
+        landing page falls back to a generic "tap below to add it" message
+        in that case rather than failing outright."""
+        if not self._valid_token(token):
+            return None
+        try:
+            return json.loads((self._dir / f"{token}.json").read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+
+    @staticmethod
+    def _valid_token(token: str) -> bool:
+        return bool(token) and all(c in "0123456789abcdef" for c in token)
 
     def _prune(self) -> None:
         cutoff = time.time() - RETENTION_SECONDS
@@ -54,6 +90,7 @@ class IcsStore:
                 try:
                     if f.stat().st_mtime < cutoff:
                         f.unlink()
+                        Path(str(f)[:-len(".ics")] + ".json").unlink(missing_ok=True)
                 except OSError:
                     continue
         except OSError:

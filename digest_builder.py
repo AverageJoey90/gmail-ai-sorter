@@ -145,7 +145,9 @@ def _render_items(items: list[dict], variant: str = "good") -> str:
 
     The Add to Calendar link (`calendar_link`, when present) is a fully-built
     URL already - pipeline.py generates the actual .ics file for any event
-    and hands back a link to a small dashboard endpoint that serves it, so
+    and hands back a link to a small dashboard landing page (round 28: shows
+    the event's title/time/location in plain text plus its own "Add to
+    Calendar" button, rather than linking straight to the raw .ics file) so
     tapping it opens the device's native calendar app (iPhone included) -
     see ics_builder.py/ics_store.py for why that replaced the older
     calendar.google.com/render link Gmail-only approach."""
