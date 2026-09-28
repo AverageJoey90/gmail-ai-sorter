@@ -247,6 +247,11 @@ def create_app(bootstrap_store: BootstrapStore, store: SettingsStore) -> Flask:
             weekday_val = a.get("digest_weekday") or DEFAULT_DIGEST_WEEKDAY
             weekday_wrap_id = f"weekday-wrap-{a['index']}"
             hold_unread_checked = "checked" if a.get("hold_unread_emails") else ""
+            # Round 30: defaults to True (via .get's fallback) so an account
+            # connected before this setting existed keeps its original
+            # behaviour - drafts created - unless someone opts out on its
+            # card.
+            create_drafts_checked = "checked" if a.get("create_draft_replies", True) else ""
             gemini_key_placeholder = (
                 "(already set - leave blank to keep using it)" if a.get("gemini_api_key")
                 else "(optional - leave blank to share the key from Setup)"
@@ -300,7 +305,20 @@ def create_app(bootstrap_store: BootstrapStore, store: SettingsStore) -> Flask:
                   <div class="muted" style="margin-top:4px">
                     While checked, an unread inbox email won't be labelled/archived until it's read or
                     {pipeline.HOLD_UNREAD_GRACE_DAYS} days old, whichever comes first. It's still fully reviewed either
-                    way - it can still appear in Good to know/School and still gets a draft reply if it needs one.
+                    way - it can still appear in Good to know/School and still gets flagged as needing a reply if it
+                    needs one.
+                  </div>
+                </div>
+                <div class="field">
+                  <label style="display:flex;align-items:center;gap:8px;font-weight:normal">
+                    <input type="checkbox" name="create_draft_replies" value="1" {create_drafts_checked} style="width:auto">
+                    Create draft replies
+                  </label>
+                  <div class="muted" style="margin-top:4px">
+                    While checked (the default), an email flagged as needing a reply gets a real draft written and
+                    saved in this account's Gmail Drafts folder, with a link to it in the digest. Unchecked, it's
+                    still flagged in "Needs a reply" with the same summary, but no draft is written or saved anywhere
+                    - useful if you'd rather write replies yourself without Gmail's Drafts folder filling up.
                   </div>
                 </div>
                 <div class="field">
@@ -476,6 +494,7 @@ def create_app(bootstrap_store: BootstrapStore, store: SettingsStore) -> Flask:
         # A checkbox only appears in form data at all when it's ticked, so
         # its presence/absence in request.form (not its value) is the signal.
         hold_unread_emails = "hold_unread_emails" in request.form
+        create_draft_replies = "create_draft_replies" in request.form
 
         fields = dict(
             digest_recipient=recipient,
@@ -483,6 +502,7 @@ def create_app(bootstrap_store: BootstrapStore, store: SettingsStore) -> Flask:
             digest_frequency=frequency,
             digest_weekday=weekday,
             hold_unread_emails=hold_unread_emails,
+            create_draft_replies=create_draft_replies,
         )
         # Never echoed back into the form (same treatment as the Setup
         # page's secret fields) - a blank submission means "leave whatever

@@ -29,10 +29,12 @@ NAS, no `.env` file to hunt for.
    it, and marks it read.
 3. Flags anything that needs a personal reply. For each one, it checks
    Gmail for an existing draft on that thread first (never creates a
-   duplicate); if none exists, it drafts a reply for you. This is decided
-   before steps 4 and 5 below, and takes priority: an email that needs a
-   reply is only ever shown in "Needs a reply", never repeated further down
-   in "Good to know" or "School" too (see "Each email appears once" below).
+   duplicate); if none exists, and this account has "Create draft replies"
+   turned on (the default - see below), it drafts a reply for you. This is
+   decided before steps 4 and 5 below, and takes priority: an email that
+   needs a reply is only ever shown in "Needs a reply", never repeated
+   further down in "Good to know" or "School" too (see "Each email appears
+   once" below).
 4. Picks the 5 most important emails from everything reviewed (excluding
    anything already flagged as needing a reply in step 3, or anything that
    went to the School section below, so nothing shows up twice) and
@@ -102,6 +104,21 @@ never changes what you see as read/unread in your inbox - only whether a
 label gets applied yet. A held email shows up in the "Inbox — no good label
 match" section with a note explaining it's just waiting out its grace
 period, not that no label was found for it.
+
+### Create draft replies (on by default)
+
+Each account's card also has a **"Create draft replies"** checkbox, on by
+default so behaviour is unchanged unless you turn it off. Ticked, this app
+works as it always has: any email the AI flags as needing a reply gets a
+real draft written and saved in that account's Gmail Drafts folder, with a
+link to it in the digest's "Needs a reply" section. Unticked, an email is
+still flagged in "Needs a reply" with exactly the same summary - just
+without a draft being written or saved anywhere, and without the AI even
+being asked to draft one (so it costs nothing extra either). Useful if
+you'd rather write your own replies without Gmail's Drafts folder filling
+up. This only ever stops a *new* draft being created - if a thread already
+has a draft sitting on it (from Gmail itself, or from a run before you
+turned this off), that's still linked exactly as before.
 
 ### Each email appears once, across the whole digest
 

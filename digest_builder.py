@@ -83,7 +83,7 @@ class DigestData:
     sorted_count: int
     left_in_inbox_count: int
     needs_reply_count: int
-    needs_reply_items: list[dict] = field(default_factory=list)     # {subject, sender, summary, reply_gist, draft_link}
+    needs_reply_items: list[dict] = field(default_factory=list)     # {subject, sender, summary, reply_gist, draft_link, drafts_disabled}
     top_important: list[dict] = field(default_factory=list)          # {subject, sender, summary, calendar_link, gmail_link}
     school_items: list[dict] = field(default_factory=list)           # {subject, sender, summary, calendar_link, gmail_link}
     sorted_items: list[dict] = field(default_factory=list)           # {subject, sender, label, gmail_link}
@@ -195,6 +195,11 @@ def build_digest_html(d: DigestData) -> str:
                 parts.append(f'<div class="reply-gist"><span class="label">Draft reply:</span> {_esc(item["reply_gist"])}</div>')
             if item.get("draft_link"):
                 parts.append(f'<a class="btn-gold" href="{_esc(item["draft_link"])}">View draft in Gmail &rarr;</a>')
+            elif item.get("drafts_disabled"):
+                # Round 30: deliberate, not a failure - this account has
+                # "Create draft replies" unticked, so distinguish that
+                # clearly from the genuine-failure message below.
+                parts.append('<span class="empty">Draft replies are turned off for this account - reply directly in Gmail.</span>')
             else:
                 parts.append('<span class="empty">Draft could not be created - see logs.</span>')
             parts.append("</div>")

@@ -27,8 +27,10 @@ log = logging.getLogger(__name__)
 # when an account has "hold_unread_emails" turned on (Joe: 'leaves unread
 # emails for a maximum of 7 days before applying a label'). It's still fully
 # processed otherwise - classified, eligible for Good to know/School, and
-# still gets a draft reply if needs_reply - only the label-apply-and-archive
-# step itself is skipped while it's within its grace period.
+# still gets flagged as needing a reply (with a real draft, if this account
+# has that turned on - see maybe_flag_needs_reply) - only the
+# label-apply-and-archive step itself is skipped while it's within its
+# grace period.
 HOLD_UNREAD_GRACE_DAYS = 7
 
 # Joe: "if you find an old Daily or Weekly digest then move that into the
@@ -310,19 +312,33 @@ def run_account(account: dict, bootstrap: BootstrapConfig, settings: dict, ai: A
     # this (via exclude_from_good_to_know) - this closes the remaining gap.
     needs_reply_refs: set[str] = set()
 
+    # Round 30 (Joe: a per-account "Create draft replies" tick box - ticked
+    # (the default) is this app's original behaviour unchanged; unticked
+    # still flags the email in "Needs a reply" with the same summary/style,
+    # just without calling the AI to write a reply or creating anything in
+    # Gmail's Drafts folder). Read once per run rather than inside the
+    # closure below purely for clarity - it never changes mid-run.
+    create_drafts = bool(account.get("create_draft_replies", True))
+
     def maybe_flag_needs_reply(ref: str, msg, ai_result: dict) -> None:
         if not ai_result.get("needs_reply"):
             return
         needs_reply_refs.add(ref)
         draft_link = None
         reply_gist = ""
+        drafts_disabled = False
         existing = gmail.has_existing_draft_for_thread(msg.thread_id)
         if existing:
             draft_link = GmailClient.draft_permalink(existing)
             # No fresh draft_reply call was made (and none needed - a draft
             # already exists), so there's no generated gist to show; say so
             # plainly rather than guessing at what an existing draft says.
+            # Shown regardless of create_drafts below - that setting only
+            # ever stops a NEW draft being created, never hides one that's
+            # already sitting there (e.g. from a run before it was turned off).
             reply_gist = "A draft reply already exists on this thread - open it in Gmail to review."
+        elif not create_drafts:
+            drafts_disabled = True
         else:
             try:
                 drafted = ai.draft_reply(msg.subject, msg.sender, msg.body_text)
@@ -338,6 +354,7 @@ def run_account(account: dict, bootstrap: BootstrapConfig, settings: dict, ai: A
             "summary": ai_result.get("summary") or _clean_excerpt(msg.body_text) or "Open in Gmail to see the full message.",
             "reply_gist": reply_gist,
             "draft_link": draft_link,
+            "drafts_disabled": drafts_disabled,
         })
 
     # ---- 1. Inbox sort -----------------------------------------------------------

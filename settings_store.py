@@ -139,6 +139,16 @@ class SettingsStore:
                 # draft'. Off by default so behaviour is unchanged unless a
                 # user opts in on that account's card.
                 "hold_unread_emails": False,
+                # Round 30 (Joe: a per-account tick box - ticked creates a
+                # real Gmail draft for anything flagged as needing a reply,
+                # same as this app has always done; unticked still flags the
+                # email in "Needs a reply" with the same summary/style, just
+                # without calling the AI to write a reply or creating
+                # anything in Gmail's Drafts folder - see
+                # pipeline.maybe_flag_needs_reply). On by default so an
+                # already-connected account's behaviour is unchanged unless
+                # someone opts out on its card.
+                "create_draft_replies": True,
                 # Optional - lets this account use its own Gemini API key
                 # instead of sharing the one from Setup, so two accounts
                 # aren't splitting one key's rate limit between them. Blank
