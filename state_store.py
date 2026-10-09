@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 
@@ -47,6 +47,27 @@ class StateStore:
         except ValueError:
             return None
         return (today - last).days
+
+    # ---- nightly tunnel-reachability check (round 32) -----------------------------------------------------------
+    # One global check (not per-account), so a single date string is enough
+    # - same "already ran today, don't fire again this minute or after a
+    # same-day restart" guard as last_run_date above, just not keyed by
+    # account address.
+    def last_tunnel_check_date(self) -> str | None:
+        return self._data.get("last_tunnel_check_date")
+
+    def mark_tunnel_checked(self, date_str: str) -> None:
+        self._data["last_tunnel_check_date"] = date_str
+        self._save()
+
+    def record_tunnel_check_result(self, result: dict) -> None:
+        """Keeps the most recent check's outcome so the dashboard can show
+        something more useful than just a date - see web_app.py."""
+        self._data["last_tunnel_check_result"] = {**result, "at": datetime.now(timezone.utc).isoformat()}
+        self._save()
+
+    def last_tunnel_check_result(self) -> dict | None:
+        return self._data.get("last_tunnel_check_result")
 
     def _save(self) -> None:
         os.makedirs(self._path.parent, exist_ok=True)

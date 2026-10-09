@@ -47,7 +47,30 @@ DEFAULTS: dict[str, Any] = {
     # exactly right (case-insensitive, per get_or_create_label) to find an
     # existing folder rather than creating a near-duplicate top-level one.
     "weekly_digest_label_name": "Weekly Digest",
+    # Round 32: Joe wants a nightly check that the public URL (whatever's
+    # providing it - Tailscale Funnel, Cloudflare Tunnel, etc.) is actually
+    # reachable from outside, and if not, a Todoist task pushed so he
+    # notices without having to go look. Off by default - there's no
+    # Todoist API key yet on a fresh install, and a check with nowhere to
+    # send its alert isn't useful.
+    "tunnel_check_enabled": False,
+    "tunnel_check_time": "03:00",
+    # Shown to Joe on the Settings card so he can reword it to whatever he
+    # wants the Todoist task to actually say - this is "the message" from
+    # his request, not hardcoded.
+    "tunnel_check_message": "Gmail AI Sorter's dashboard looks unreachable from outside - check Tailscale Funnel / Portainer.",
+    # Optional - a specific Todoist project ID to file the alert task under.
+    # Blank (the default) means Todoist's own Inbox/default project - see
+    # todoist_client.TodoistClient.create_task.
+    "todoist_project_id": "",
+    # The Todoist API key itself (from todoist.com/app/settings/integrations/developer).
+    # Stored in plain settings.json, same treatment as the per-account Gemini
+    # key above - never echoed back into the dashboard once saved (see
+    # web_app.py), just masked with a placeholder.
+    "todoist_api_key": "",
 }
+
+DEFAULT_TUNNEL_CHECK_TIME = "03:00"
 
 # Round 18: Joe asked for the run time / frequency / weekday to be purely
 # per-account settings ("there dosent need to be a run daily or weekley

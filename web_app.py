@@ -28,9 +28,12 @@ from settings_store import (
     DEFAULT_DIGEST_FREQUENCY,
     DEFAULT_DIGEST_WEEKDAY,
     DEFAULT_RUN_AT_LOCAL_TIME,
+    DEFAULT_TUNNEL_CHECK_TIME,
     SettingsStore,
     WEEKDAY_NAMES,
 )
+from state_store import StateStore
+from todoist_client import TodoistClient, TodoistError
 
 log = logging.getLogger(__name__)
 
@@ -78,6 +81,7 @@ def _weekday_options(selected: str) -> str:
 def create_app(bootstrap_store: BootstrapStore, store: SettingsStore) -> Flask:
     app = Flask(__name__)
     app.secret_key = bootstrap_store.resolve().flask_secret_key
+    state = StateStore(bootstrap_store.data_dir)
 
     # ---- resolve the live config on every request -----------------------------
     # A Setup-page save takes effect immediately (no restart) because this
@@ -90,7 +94,7 @@ def create_app(bootstrap_store: BootstrapStore, store: SettingsStore) -> Flask:
     # ---- setup gate: nothing else works until the 5 required fields are set ---
     @app.before_request
     def require_setup():
-        if request.endpoint in ("setup_form", "setup_submit", "serve_ics", "ics_landing", "static"):
+        if request.endpoint in ("setup_form", "setup_submit", "serve_ics", "ics_landing", "healthz", "static"):
             return None
         if not is_bootstrap_complete(g.bootstrap):
             return redirect(url_for("setup_form"))
@@ -100,7 +104,7 @@ def create_app(bootstrap_store: BootstrapStore, store: SettingsStore) -> Flask:
     @app.before_request
     def require_login():
         if request.endpoint in (
-            "login_form", "login_submit", "setup_form", "setup_submit", "serve_ics", "ics_landing", "static",
+            "login_form", "login_submit", "setup_form", "setup_submit", "serve_ics", "ics_landing", "healthz", "static",
         ):
             return None
         if not session.get("authed"):
@@ -220,6 +224,28 @@ def create_app(bootstrap_store: BootstrapStore, store: SettingsStore) -> Flask:
         accounts = store.list_accounts()
         flash = request.args.get("flash", "")
         flash_html = f'<div class="flash">{_esc(flash)}</div>' if flash else ""
+
+        todoist_key_placeholder = (
+            "(already set - leave blank to keep)" if settings.get("todoist_api_key")
+            else "(from todoist.com/app/settings/integrations/developer)"
+        )
+        # Built with per-field escaping (only the dynamic parts - the error
+        # detail could in principle contain anything) rather than escaping
+        # the whole composed sentence, same granularity as the account
+        # status line above - escaping the whole thing would also mangle
+        # plain apostrophes in the fixed wording into HTML entities.
+        last_check = state.last_tunnel_check_result()
+        if not last_check:
+            tunnel_status_html = "Hasn't run yet."
+        elif last_check.get("ok"):
+            tunnel_status_html = f"Last check {_esc(last_check.get('at', ''))[:16].replace('T', ' ')} UTC &mdash; reachable."
+        else:
+            note = " Todoist task created." if last_check.get("task_created") else ""
+            todoist_err = f" (Todoist error: {_esc(last_check['todoist_error'])})" if last_check.get("todoist_error") else ""
+            tunnel_status_html = (
+                f"Last check {_esc(last_check.get('at', ''))[:16].replace('T', ' ')} UTC &mdash; "
+                f"NOT reachable: {_esc(last_check.get('detail', ''))}{note}{todoist_err}"
+            )
 
         account_cards = []
         for a in accounts:
@@ -401,7 +427,48 @@ def create_app(bootstrap_store: BootstrapStore, store: SettingsStore) -> Flask:
               rather than finding your existing one. Created automatically the first time it's needed if nothing
               matches.</div>
           </div>
+          <div class="field">
+            <label style="display:flex;align-items:center;gap:8px;font-weight:normal">
+              <input type="checkbox" name="tunnel_check_enabled" value="1"
+                     {"checked" if settings.get("tunnel_check_enabled") else ""} style="width:auto">
+              Nightly check that the dashboard is reachable from outside
+            </label>
+            <div class="muted" style="margin-top:4px">
+              Every night at the time below, this container makes a real request to its own public URL (not just a
+              local check) - if that fails, it pushes the task below into Todoist so you notice without having to
+              go look. {tunnel_status_html}
+            </div>
+          </div>
+          <div class="field">
+            <label for="tunnel_check_time">Nightly check time</label>
+            <input type="text" id="tunnel_check_time" name="tunnel_check_time"
+                   value="{_esc(settings.get('tunnel_check_time') or DEFAULT_TUNNEL_CHECK_TIME)}" placeholder="03:00">
+            <div class="muted">24-hour HH:MM, in the timezone above.</div>
+          </div>
+          <div class="field">
+            <label for="tunnel_check_message">Todoist task text</label>
+            <input type="text" id="tunnel_check_message" name="tunnel_check_message"
+                   value="{_esc(settings.get('tunnel_check_message') or '')}">
+            <div class="muted">What the Todoist task says when the check fails - word it however you want.</div>
+          </div>
+          <div class="field">
+            <label for="todoist_project_id">Todoist project ID</label>
+            <input type="text" id="todoist_project_id" name="todoist_project_id"
+                   value="{_esc(settings.get('todoist_project_id') or '')}" placeholder="optional - blank uses your Inbox">
+            <div class="muted">Find it in the project's URL in Todoist (the number after /app/project/). Leave
+              blank to file the task in your Inbox instead.</div>
+          </div>
+          <div class="field">
+            <label for="todoist_api_key">Todoist API key</label>
+            <input type="password" id="todoist_api_key" name="todoist_api_key" value=""
+                   placeholder="{_esc(todoist_key_placeholder)}" autocomplete="new-password">
+            <div class="muted">From <a href="https://todoist.com/app/settings/integrations/developer" target="_blank"
+              rel="noopener">todoist.com &rarr; Settings &rarr; Integrations &rarr; Developer</a>. Never shown back
+              here once saved - leave blank to keep whatever's already set. "Test Todoist now" below uses whatever's
+              currently typed in these three fields, even if you haven't hit "Save settings" yet.</div>
+          </div>
           <button type="submit">Save settings</button>
+          <button type="submit" formaction="{url_for('test_todoist')}" class="secondary">Test Todoist now</button>
         </form>
         </div>
 
@@ -452,14 +519,46 @@ def create_app(bootstrap_store: BootstrapStore, store: SettingsStore) -> Flask:
         if not weekly_digest_label_name:
             return redirect(url_for("dashboard", flash="The digest label/folder name can't be blank - nothing saved."))
 
-        store.update_settings(
+        # Round 32: nightly tunnel-reachability check + Todoist alert. A
+        # blank/missing time (e.g. an older form submission, or any test
+        # written before this field existed) falls back to the default
+        # rather than blocking the whole save - only an actually-malformed
+        # value is rejected, same leniency as the confidence threshold
+        # above, since this field is unrelated to the rest of the form.
+        tunnel_check_enabled = "tunnel_check_enabled" in request.form
+        tunnel_check_time = request.form.get("tunnel_check_time", "").strip()
+        if tunnel_check_time:
+            try:
+                hh, mm = tunnel_check_time.split(":")
+                int(hh), int(mm)
+            except ValueError:
+                return redirect(url_for("dashboard", flash="Nightly check time must be HH:MM - nothing saved."))
+        else:
+            tunnel_check_time = DEFAULT_TUNNEL_CHECK_TIME
+        tunnel_check_message = request.form.get("tunnel_check_message", "").strip()
+        todoist_project_id = request.form.get("todoist_project_id", "").strip()
+
+        settings_update = dict(
             classify_confidence_threshold=threshold,
             ignore_labels=ignore_labels,
             school_section_labels=school_section_labels,
             school_lookback_days=school_lookback_days,
             move_old_digests_to_weekly_folder=move_old_digests,
             weekly_digest_label_name=weekly_digest_label_name,
+            tunnel_check_enabled=tunnel_check_enabled,
+            tunnel_check_time=tunnel_check_time,
+            tunnel_check_message=tunnel_check_message,
+            todoist_project_id=todoist_project_id,
         )
+        # Same "blank = leave whatever's already set alone" masking as the
+        # per-account Gemini key (see update_account_settings) - never
+        # echoed back into the form, so a blank submission must not be
+        # treated as "clear the key".
+        todoist_api_key = request.form.get("todoist_api_key", "").strip()
+        if todoist_api_key:
+            settings_update["todoist_api_key"] = todoist_api_key
+
+        store.update_settings(**settings_update)
         return redirect(url_for("dashboard", flash="Settings saved."))
 
     # ---- account actions -----------------------------------------------------------
@@ -550,6 +649,37 @@ def create_app(bootstrap_store: BootstrapStore, store: SettingsStore) -> Flask:
         cfg = g.bootstrap  # captured before the thread starts - see run_one above
         threading.Thread(target=pipeline.run_all, args=(cfg, store), daemon=True).start()
         return redirect(url_for("dashboard", flash="Run started for all accounts - refresh in a minute or two for results."))
+
+    # ---- nightly tunnel-reachability check (round 32) -----------------------------------------------------------
+    # Exempt from login/setup, same reasoning as the ics routes below: this
+    # is hit by an outbound request this same container makes to its own
+    # public URL (see tunnel_check.py) - there's no browser/session
+    # involved, so it has to answer with no cookie and no setup completed.
+    # Deliberately trivial (no DB/account checks) - it's only testing
+    # whether the public URL path (DNS + Funnel/tunnel + this process) is
+    # reachable at all, not anything about the app's own state.
+    @app.get("/healthz")
+    def healthz():
+        return "ok", 200
+
+    @app.post("/settings/test-todoist")
+    def test_todoist():
+        # Reads straight from this submission (via the Settings form's
+        # formaction - see dashboard() below), not from what's already
+        # saved, so Joe can test a freshly-typed key/project/message before
+        # deciding whether to save it. A blank key/project field falls back
+        # to whatever's already saved, same "blank = keep existing" masking
+        # as the API key fields elsewhere on this dashboard.
+        settings = store.get_settings()
+        api_key = request.form.get("todoist_api_key", "").strip() or settings.get("todoist_api_key", "")
+        project_id = request.form.get("todoist_project_id", "").strip() or settings.get("todoist_project_id", "")
+        message = request.form.get("tunnel_check_message", "").strip() or settings.get("tunnel_check_message", "")
+
+        try:
+            TodoistClient(api_key).create_task(content=f"[TEST] {message}", project_id=project_id)
+        except TodoistError as exc:
+            return redirect(url_for("dashboard", flash=f"Todoist test failed: {exc}"))
+        return redirect(url_for("dashboard", flash="Test task created in Todoist - check your Inbox (or the project you set)."))
 
     # ---- calendar event links -----------------------------------------------------------
     # Deliberately exempt from login/setup below: `ics_landing` is the link a

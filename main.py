@@ -8,7 +8,10 @@
    day of the week, `digest_weekday`, at that same time of day, see
    `_is_due`), and if so runs that account's sort+digest pipeline once.
    Accounts are tracked independently, so different run
-   times/frequencies/weekdays per account all work at once.
+   times/frequencies/weekdays per account all work at once. The same loop
+   also runs one global nightly check (round 32) of whether the public
+   URL is actually reachable from outside, pushing a Todoist task if it
+   isn't - see `run_tunnel_check`/tunnel_check.py/todoist_client.py.
 2. A background daemon thread supervising an optional Cloudflare Tunnel
    subprocess (see tunnel_manager.py) - reacts within seconds to a tunnel
    token being entered, changed, or cleared on the dashboard's Setup page.
@@ -37,17 +40,20 @@ from zoneinfo import ZoneInfo
 from waitress import serve
 
 import pipeline
+import tunnel_check
 from ai_client import AiClient
-from config import BootstrapStore, is_bootstrap_complete
+from config import BootstrapConfig, BootstrapStore, is_bootstrap_complete
 from settings_store import (
     DEFAULT_DIGEST_FREQUENCY,
     DEFAULT_DIGEST_WEEKDAY,
     DEFAULT_RUN_AT_LOCAL_TIME,
+    DEFAULT_TUNNEL_CHECK_TIME,
     SettingsStore,
     weekday_index,
 )
 from state_store import StateStore
 from tailscale_manager import TailscaleManager
+from todoist_client import TodoistClient
 from tunnel_manager import TunnelManager
 from web_app import create_app
 
@@ -100,6 +106,47 @@ def _is_due(
     return days_since != 0
 
 
+def _tunnel_check_due(hh: int, mm: int, now: datetime, enabled: bool, already_checked_today: bool) -> bool:
+    """Round 32: whether the nightly "is the tunnel still live" check
+    should fire on this scheduler tick. Pure and easily testable, same
+    pattern as _is_due above - the hour/minute match plus "not already run
+    today" (so a restart mid-minute, or the loop ticking more than once in
+    the same minute, doesn't push two Todoist tasks)."""
+    return enabled and now.hour == hh and now.minute == mm and not already_checked_today
+
+
+def run_tunnel_check(
+    bootstrap: BootstrapConfig,
+    settings: dict,
+    todoist_client_factory=TodoistClient,
+) -> dict:
+    """Checks whether the public URL is reachable and, only if it isn't AND
+    a Todoist API key is set, pushes a task with the message Joe configured
+    on the Settings card. `todoist_client_factory` is swappable purely so
+    tests can inject a fake Todoist client without a real network call.
+
+    Returns a small result dict - {"ok": bool, "detail": str,
+    "task_created": bool, "todoist_error": str | None} - that's both logged
+    and stashed via StateStore.record_tunnel_check_result so the dashboard
+    can show the last outcome."""
+    reachable, detail = tunnel_check.check_tunnel(bootstrap.public_base_url)
+    result: dict = {"ok": reachable, "detail": detail, "task_created": False, "todoist_error": None}
+
+    if reachable or not settings.get("todoist_api_key"):
+        return result
+
+    message = settings.get("tunnel_check_message") or ""
+    content = f"{message}\n\n({detail})" if message else detail
+    try:
+        client = todoist_client_factory(settings["todoist_api_key"])
+        client.create_task(content=content, project_id=settings.get("todoist_project_id") or "")
+        result["task_created"] = True
+    except Exception as exc:
+        log.exception("Failed to push the tunnel-down Todoist task")
+        result["todoist_error"] = str(exc)
+    return result
+
+
 def scheduler_loop(bootstrap_store: BootstrapStore, store: SettingsStore) -> None:
     state = StateStore(bootstrap_store.data_dir)
     log.info("Scheduler thread started")
@@ -145,6 +192,20 @@ def scheduler_loop(bootstrap_store: BootstrapStore, store: SettingsStore) -> Non
                     summary = {"ok": False, "error": pipeline.describe_run_exception(exc)}
                 store.record_run_result(account["index"], summary)
                 state.mark_ran_today(account["address"], today_str)
+
+            # Round 32: one global nightly check, independent of any
+            # account's own schedule - "checks every night that the tunnel
+            # is live, if not then it pushes a message ... as a task".
+            check_hh, check_mm = _parse_hh_mm(
+                settings.get("tunnel_check_time") or DEFAULT_TUNNEL_CHECK_TIME, DEFAULT_TUNNEL_CHECK_TIME,
+            )
+            already_checked = state.last_tunnel_check_date() == today_str
+            if _tunnel_check_due(check_hh, check_mm, now, bool(settings.get("tunnel_check_enabled")), already_checked):
+                log.info("Running nightly tunnel reachability check")
+                result = run_tunnel_check(bootstrap, settings)
+                log.info("Tunnel check result: %s", result)
+                state.mark_tunnel_checked(today_str)
+                state.record_tunnel_check_result(result)
         except Exception:
             # A bad settings value or a transient error must not kill the
             # scheduler thread permanently - log and keep ticking.
