@@ -1,6 +1,17 @@
-"""Thin Todoist REST API v2 wrapper - just enough to create a task, for the
-nightly "is the tunnel still live" alert (round 32, Joe's request) and its
-"Test Todoist now" button on the dashboard.
+"""Thin Todoist API wrapper - just enough to create a task, for the nightly
+"is the tunnel still live" alert (round 32, Joe's request) and its "Test
+Todoist now" button on the dashboard.
+
+Round 32.1: the older REST v2 endpoint this originally used
+(api.todoist.com/rest/v2/tasks) returns a hard 410 Gone as of Todoist's
+API v1.0 migration (announced for Q4 2025 - confirmed live against Joe's
+real key, not just from the announcement) - Todoist merged their old
+Sync and REST APIs into one unified API under /api/v1/. The simple
+single-task-creation call used here still exists in the new API, just at
+a new path (developer.todoist.com's own quickstart example), with the
+same auth, field names (`content`/`due_string`/`project_id`), and
+response shape (the created task's JSON, with an `id`) - only the base
+URL changed.
 
 Deliberately minimal, same philosophy as gmail_client.py: plain `requests`
 calls against the REST endpoint rather than pulling in Todoist's own SDK for
@@ -14,7 +25,7 @@ import requests
 
 log = logging.getLogger(__name__)
 
-API_URL = "https://api.todoist.com/rest/v2/tasks"
+API_URL = "https://api.todoist.com/api/v1/tasks"
 
 
 class TodoistError(RuntimeError):
