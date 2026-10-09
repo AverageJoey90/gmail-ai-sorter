@@ -675,10 +675,28 @@ def create_app(bootstrap_store: BootstrapStore, store: SettingsStore) -> Flask:
         project_id = request.form.get("todoist_project_id", "").strip() or settings.get("todoist_project_id", "")
         message = request.form.get("tunnel_check_message", "").strip() or settings.get("tunnel_check_message", "")
 
+        # Logged deliberately (never the key itself) so this is visible in
+        # container logs regardless of what the dashboard's flash banner
+        # shows - Joe reported seeing nothing in either place the first
+        # time this was tried, which is a real gap: nothing here logged
+        # anything before this line existed.
+        log.info(
+            "Test Todoist now: key present=%s (len %d), project_id=%r",
+            bool(api_key), len(api_key), project_id,
+        )
         try:
             TodoistClient(api_key).create_task(content=f"[TEST] {message}", project_id=project_id)
         except TodoistError as exc:
+            log.warning("Test Todoist now failed: %s", exc)
             return redirect(url_for("dashboard", flash=f"Todoist test failed: {exc}"))
+        except Exception as exc:
+            # Never let an unanticipated exception fall through to Flask's
+            # bare 500 page (no flash, nothing useful shown) - log it in
+            # full and still give a readable flash message, same principle
+            # as pipeline.describe_run_exception for a real run's failures.
+            log.exception("Test Todoist now hit an unexpected error")
+            return redirect(url_for("dashboard", flash=f"Todoist test failed - unexpected error: {exc}"))
+        log.info("Test Todoist now: task created successfully")
         return redirect(url_for("dashboard", flash="Test task created in Todoist - check your Inbox (or the project you set)."))
 
     # ---- calendar event links -----------------------------------------------------------
